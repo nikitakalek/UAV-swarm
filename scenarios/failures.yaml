@@ -1,0 +1,22 @@
+# Сценарий с отказами: 2 явных отказа + новая цель с доразведкой (контрольная точка P3).
+schema_version: 1
+name: failures
+description: "Отказ 2 из 10 агентов (20 %) и новая цель на середине миссии"
+dt: 0.5
+t_end: 3600
+world:
+  size: [1000, 1000]
+  targets: {count: 20, distribution: clusters, clusters: [{center: [300, 700], sigma: 120}, {center: [750, 300], sigma: 150}]}
+agents:
+  count: 10
+  base: [0, 0]
+  speed: 10
+sensor: {swath_width: 40, pd_pass: 0.9}
+mission: {type: search, n_cells: 25}
+allocator: {name: stub_roundrobin}
+faults:
+  detect_delay: 2.0
+events:
+  - {t: 150, type: agent_failure, agent: 3}
+  - {t: 240, type: agent_failure, agent: 7}
+  - {t: 300, type: new_target, pos: [820, 820], search_radius: 80}
