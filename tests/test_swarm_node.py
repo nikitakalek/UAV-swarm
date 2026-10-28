@@ -6,12 +6,17 @@
 
 from __future__ import annotations
 
+import threading
+import time
+
 import pytest
 
 from swarmcore_node.messages import Msg, PlanPayload
 from swarmcore_node.modes import Mode, ModeInputs, ModeMachine
 from swarmcore_node.node import NodeConfig
 from swarmcore_node.testing import LocalSwarm
+from swarmcore_node.vehicle import ThreadCommands
+from swarmsim.agents.kinematics import KinematicMotion
 
 SMALL = {
     "name": "small", "world": {"size": [160, 120], "targets": {"count": 0}},
@@ -176,3 +181,69 @@ def test_mode_machine_reports_transitions_once():
     assert mm.step(ModeInputs(has_mission=True)) == (Mode.IDLE, Mode.NORMAL, "")
     assert mm.step(ModeInputs(has_mission=True)) is None
     assert mm.step(ModeInputs(has_mission=True, gcs_ok=False))[1] == Mode.NO_GCS
+
+
+# ------------------------------------------------------------------ команды аппарату в фоне (#51)
+class GatedMotion(KinematicMotion):
+    """Аппарат, у которого взлёт «длится», пока тест не откроет ворота (как MAVSDK takeoff)."""
+
+    def __init__(self, *a, gate=None, fail_takeoff=False, **kw):
+        super().__init__(*a, **kw)
+        self.gate, self.fail_takeoff = gate, fail_takeoff
+
+    def takeoff(self, alt=None):
+        if self.gate is not None:
+            assert self.gate.wait(30), "ворота не открыли"
+        if self.fail_takeoff:
+            raise RuntimeError("взлёт отклонён автопилотом")
+        super().takeoff(alt)
+
+
+def _gated_swarm(gate, fail_ids=()):
+    def make(i, home, speed):
+        return GatedMotion(i, home, v_cruise=speed, gate=gate, fail_takeoff=i in fail_ids)
+
+    return LocalSwarm(SMALL, NodeConfig(vehicle_commands="thread"), motion_factory=make)
+
+
+def test_slow_takeoff_does_not_silence_heartbeat():
+    gate = threading.Event()
+    sw = _gated_swarm(gate)
+    sw.run(20)  # 20 модельных секунд взлёт «идёт» — дольше тайм-аута 2,5 с
+    assert all(n.phase == "takeoff" for n in sw.nodes)
+    assert not any(n.log.of_type("peer_lost") for n in sw.nodes), "никого не объявили выбывшим"
+    assert {st["status"] for st in sw.gcs.status.values()} == {"takeoff"}
+    assert not any(n.log.of_type("task_done") for n in sw.nodes)
+    gate.set()
+    s = sw.run(1200).summary()
+    _ok(s)
+    for n in sw.nodes:
+        assert n.log.of_type("takeoff")[0].data["took_s"] >= 19
+        n.vehicle.close()
+
+
+def test_takeoff_error_hands_tasks_to_others():
+    sw = _gated_swarm(gate=None, fail_ids=(1,))
+    s = sw.run(1200).summary()
+    _ok(s)
+    bad = sw.nodes[1]
+    assert bad.log.of_type("vehicle_error") and "ошибка аппарата" in bad.rtl_reason
+    assert not bad.log.of_type("task_done")
+    for n in sw.nodes:
+        n.vehicle.close()
+
+
+def test_thread_commands_report_in_order():
+    cmds = ThreadCommands()
+    gate = threading.Event()
+    cmds.submit("a", gate.wait)
+    cmds.submit("b", lambda: (_ for _ in ()).throw(ValueError("x")))
+    assert cmds.busy and cmds.poll() == []
+    gate.set()
+    deadline = time.monotonic() + 5
+    got = []
+    while len(got) < 2 and time.monotonic() < deadline:
+        got += cmds.poll()
+    assert [g[0] for g in got] == ["a", "b"]
+    assert got[0][1] is None and isinstance(got[1][1], ValueError)
+    cmds.close()

@@ -52,7 +52,8 @@ def cmd_node(args) -> int:
     addrs = _node_addrs(args)
     bind = ("0.0.0.0", addrs[args.id][1])
     link = UdpLink(bind, [a for i, a in enumerate(addrs) if i != args.id] + [parse_addr(args.gcs)])
-    cfg = NodeConfig(battery_wh=args.battery_wh, peer_timeout=args.peer_timeout)
+    commands = args.vehicle_commands or ("thread" if args.vehicle == "mavsdk" else "inline")
+    cfg = NodeConfig(battery_wh=args.battery_wh, peer_timeout=args.peer_timeout, vehicle_commands=commands)
     node = SwarmNode(args.id, _make_motion(args), link, cfg)
     now = _clock(args)
     stop = {"flag": False}
@@ -73,6 +74,7 @@ def cmd_node(args) -> int:
             time.sleep(args.loop_dt)
     finally:
         node.save(args.out)
+        node.vehicle.close()
         node.motion.close()
         link.close()
     return 0
@@ -157,6 +159,8 @@ def main(argv=None) -> int:
     sp.add_argument("--altitude", type=float, default=15.0, help="только для взлёта MAVSDK по умолчанию")
     sp.add_argument("--battery-wh", type=float, default=200.0)
     sp.add_argument("--peer-timeout", type=float, default=2.5)
+    sp.add_argument("--vehicle-commands", choices=["inline", "thread"],
+                    help="как выполнять arm/взлёт/посадку: по умолчанию thread для mavsdk, inline для kinematic")
     sp.add_argument("--linger", type=float, default=3.0)
     sp.set_defaults(func=cmd_node)
 
@@ -182,6 +186,7 @@ def main(argv=None) -> int:
     sp.add_argument("--gcs-port", type=int, default=46999)
     sp.add_argument("--out", default="runs/demo")
     sp.add_argument("--vehicle", choices=["kinematic", "mavsdk"], default="kinematic")
+    sp.add_argument("--vehicle-commands", choices=["inline", "thread"])
     sp.add_argument("--timeout", type=float, default=1800.0)
     sp.add_argument("--quiet", action="store_true")
 

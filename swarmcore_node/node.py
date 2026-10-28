@@ -29,6 +29,7 @@ import numpy as np
 from swarmcore_node.link import PeerLink
 from swarmcore_node.messages import GCS_ID, Msg, PlanPayload
 from swarmcore_node.modes import Mode, ModeInputs, ModeMachine
+from swarmcore_node.vehicle import make_commands
 from swarmsim.agents.base import Agent, MotionSource
 from swarmsim.eventlog import EventLog
 from swarmsim.interfaces import AgentView, SwarmSnapshot
@@ -53,6 +54,8 @@ class NodeConfig:
     z_range: tuple[float, float] = (0.0, 120.0)
     allocator: str = "sector"
     allocator_params: dict[str, Any] = field(default_factory=dict)
+    # inline — команды аппарату мгновенные (кинематика); thread — в фоне (MAVSDK: взлёт до 90 с)
+    vehicle_commands: str = "inline"
 
 
 @dataclass
@@ -103,7 +106,9 @@ class SwarmNode:
         self.max_version = 0
         self.plan_issue: Optional[str] = None
         self.rtl_reason: Optional[str] = None
-        self.flying = False
+        self.phase = "ground"  # ground → takeoff → air → landing → ground
+        self.vehicle = make_commands(self.cfg.vehicle_commands, f"vehicle-{node_id}")
+        self._phase_t = 0.0
         self.finished = False
         self.energy_used_wh = 0.0
         self.gcs_seen = -math.inf
@@ -122,6 +127,7 @@ class SwarmNode:
         for m in self.link.recv():
             if m.src != self.id:
                 self._on_msg(m)
+        self._poll_vehicle()
         if self.mission is not None and not self.finished:
             self._detect_failures()
             if self.is_leader():
@@ -139,7 +145,7 @@ class SwarmNode:
             return
         self._event("self_failure", data={"reason": "отказ борта (имитация)"})
         self.crashed = True
-        self.motion.kill()
+        self.vehicle.run_now(self.motion.kill)  # не ждём: узел замолкает сразу
 
     # ================================================================== роли
     def alive_ids(self) -> list[int]:
@@ -188,7 +194,7 @@ class SwarmNode:
     def _on_mission(self, m: Msg) -> None:
         if m.mission_id == self.mission_id:
             return
-        if self.flying:
+        if self.phase != "ground":
             self._event("mission_ignored", data={"mission_id": m.mission_id, "reason": "аппарат в полёте"})
             return
         sc = Scenario.model_validate(m.payload["scenario"])
@@ -349,42 +355,77 @@ class SwarmNode:
         if source != self.id:
             self._event("plan_adopted", data={"version": plan.version, "leader": plan.leader, "cause": plan.cause})
         mine = plan.plans.get(self.id, []) if self.id in plan.members and self.rtl_reason is None else []
-        if mine and not self.flying and self.rtl_reason is None:
-            self._takeoff()
-        self.agent.set_plan(list(mine), self.tasks)
+        self.agent.set_plan(list(mine), self.tasks)  # взлёт — в _execute, когда в плане есть работа
 
     # ================================================================== исполнение
+    @property
+    def flying(self) -> bool:
+        return self.phase == "air"
+
+    def _set_phase(self, phase: str) -> None:
+        self.phase = phase
+        self._phase_t = self.t or 0.0
+
     def _takeoff(self) -> None:
-        self.motion.arm()
-        self.motion.takeoff(self.altitude)
-        self.flying = True
-        self.agent.status = "idle"
-        self._event("takeoff", data={"altitude": self.altitude})
+        alt = self.altitude
+
+        def go() -> None:
+            self.motion.arm()
+            self.motion.takeoff(alt)
+
+        self._set_phase("takeoff")
+        self._event("takeoff_started", data={"altitude": alt})
+        self.vehicle.submit("takeoff", go)
+        self._poll_vehicle()
+
+    def _land(self) -> None:
+        self._set_phase("landing")
+        self.vehicle.submit("land", self.motion.land)
+        self._poll_vehicle()
+
+    def _poll_vehicle(self) -> None:
+        """Результаты команд аппарату, выполненных в фоне."""
+        for name, err in self.vehicle.poll():
+            took = round((self.t or 0.0) - self._phase_t, 2)
+            if err is not None:
+                self._event("vehicle_error", data={"command": name, "error": str(err)})
+                self._set_phase("ground" if name == "takeoff" else "air")
+                if self.rtl_reason is None and self.mission is not None:
+                    self._start_rtl(f"ошибка аппарата при {name}: {err}")
+            elif name == "takeoff":
+                self._set_phase("air")
+                self.agent.status = "idle"
+                self._event("takeoff", data={"altitude": self.altitude, "took_s": took})
+            elif name == "land":
+                self._set_phase("ground")
+                self._event("landed", data={"energy_used_wh": round(self.energy_used_wh, 1), "took_s": took})
 
     def _start_rtl(self, reason: str) -> None:
         self.rtl_reason = reason
         self._event("rtl", data={"reason": reason})
         if self.agent is not None and self.tasks is not None:
             self.agent.set_plan([], self.tasks)
-            if self.flying and self.agent.status in ("idle", "home"):
+            if self.phase == "air" and self.agent.status in ("idle", "home"):
                 self.agent.status = "transit"  # Agent сам уведёт аппарат домой
 
     def _execute(self, dt: float) -> None:
         a = self.agent
-        if self.flying:
-            a.step(dt, self.tasks, self.world)
+        has_work = a.current is not None or any(not self.tasks[t].is_finished for t in a.queue)
+        if self.phase == "ground" and has_work and self.rtl_reason is None:
+            self._takeoff()
+        if self.phase in ("takeoff", "air", "landing"):
             self.energy_used_wh += self.cfg.power_w * dt / 3600.0
+        if self.phase == "air":
+            a.step(dt, self.tasks, self.world)
             self._check_battery()
             if a.current is None and not a.queue and a.status in ("home", "idle") and \
                     math.dist(a.state.pos, self.home) < 1.0:
-                self.motion.land()
-                self.flying = False
-                self._event("landed", data={"energy_used_wh": round(self.energy_used_wh, 1)})
+                self._land()
         for t in self.tasks:
             if t.done_by == self.id and t.id not in self._done_logged:
                 self._done_logged.add(t.id)
                 self._event("task_done", data={"task": t.id})
-        if not self.flying and (self.rtl_reason or not self.tasks.unfinished()):
+        if self.phase == "ground" and (self.rtl_reason or not self.tasks.unfinished()):
             self.finished = True
 
     def _check_battery(self) -> None:
@@ -420,7 +461,8 @@ class SwarmNode:
         if self.mission is not None:
             a = self.agent
             payload.update({
-                "current": a.current, "queue": list(a.queue), "status": a.status, "flying": self.flying,
+                "current": a.current, "queue": list(a.queue), "flying": self.flying, "phase": self.phase,
+                "status": a.status if self.phase == "air" else self.phase,
                 "progress": {a.current: self.tasks[a.current].progress} if a.current else {},
                 "done": sorted(t.id for t in self.tasks if t.is_finished),
                 "n_tasks": len(self.tasks), "energy_used_wh": round(self.energy_used_wh, 3),
