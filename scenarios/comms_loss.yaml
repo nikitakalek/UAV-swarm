@@ -1,0 +1,15 @@
+# Потеря связи: разрыв с наземной станцией ~30 % времени миссии + неидеальный канал.
+schema_version: 1
+name: comms_loss
+description: "Задержка 200 мс + потери 10 %, разрыв связи с НС 30 % времени, отказ во время разрыва"
+dt: 0.5
+t_end: 3600
+world: {size: [1000, 1000], targets: {count: 20}}
+agents: {count: 6, speed: 10}
+mission: {n_cells: 16}
+comms: {model: stub_lossy, delay: 0.2, jitter: 0.05, loss: 0.1, heartbeat_period: 1.0}
+faults: {detect_delay: 2.0}
+events:
+  - {t: 100, type: comms_loss, duration: 150, scope: gcs}
+  - {t: 120, type: agent_failure, agent: 1}
+  - {t: 400, type: comms_loss, duration: 60, scope: all}

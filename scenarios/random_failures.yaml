@@ -1,0 +1,11 @@
+# Случайные отказы λ = 0.2: какие агенты и когда — определяется зерном (парный дизайн).
+schema_version: 1
+name: random_failures
+dt: 0.5
+t_end: 3600
+world: {size: [1000, 1000], targets: {count: 20}}
+agents: {count: 10, speed: 10}
+mission: {n_cells: 25}
+faults:
+  detect_delay: 2.0
+  random_failures: {fraction: 0.2, t_window: [60, 400]}

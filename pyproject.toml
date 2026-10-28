@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=64", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "swarmcore"
+version = "0.1.0"
+description = "SwarmCore: детерминированный 2D-симулятор роя БПЛА и испытательный стенд прогонов"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "numpy>=1.24",
+    "shapely>=2.0",
+    "pydantic>=2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+viz = ["matplotlib>=3.7"]
+px4 = ["mavsdk<4"]
+dev = ["pytest>=7"]
+
+[project.scripts]
+swarmcore = "apps.cli:main"
+swarmnode = "swarmcore_node.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["swarmsim*", "apps*", "swarmcore_px4*", "swarmcore_node*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+markers = [
+    "sitl: требует запущенного PX4 SITL (по умолчанию пропускается)",
+    "slow: сквозной прогон процессов по UDP (~15 с)",
+]

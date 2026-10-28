@@ -1,0 +1,31 @@
+# M2-13: сектора размечены пользователем вручную (вместо автоматического разбиения).
+schema_version: 1
+name: manual_sectors
+dt: 0.5
+t_end: 3600
+world:
+  size: [1000, 1000]
+  nofly:
+    - [[450, 450], [550, 450], [550, 550], [450, 550]]
+  targets: {count: 20}
+agents: {count: 4}
+mission:
+  n_cells: 25
+  sectors_version: 1
+  sector_assignment: clip       # centroid | overlap | clip
+  sectors:
+    - id: sw
+      polygon: [[0, 0], [600, 0], [450, 450], [0, 450]]
+      agents: [0]
+    - id: se
+      polygon: [[600, 0], [1000, 0], [1000, 500], [550, 500], [550, 450], [450, 450]]
+      agents: [1]
+    - id: ne
+      polygon: [[550, 500], [1000, 500], [1000, 1000], [400, 1000], [550, 550]]
+      agents: [2]
+    - id: nw
+      polygon: [[0, 450], [450, 450], [450, 550], [550, 550], [400, 1000], [0, 1000]]
+      agents: [3]
+allocator: {name: manual_sectors}
+events:
+  - {t: 200, type: agent_failure, agent: 2}

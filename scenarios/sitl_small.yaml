@@ -1,0 +1,20 @@
+# Маленький сценарий для PX4 SITL (M2-11/M2-12, INT-5): 3 аппарата, 160×120 м, отказ одного.
+# Точки старта совпадают с HOMES для multi_sitl.sh: HOMES="0,0 4,0 8,0".
+schema_version: 1
+name: sitl_small
+dt: 0.5
+t_end: 900
+world:
+  size: [160, 120]
+  targets: {count: 6}
+agents:
+  count: 3
+  homes: [[0, 0], [4, 0], [8, 0]]
+  speed: 5
+  altitude: 15
+  altitude_step: 4
+sensor: {swath_width: 20, pd_pass: 0.9}
+mission: {n_cells: 6}
+faults: {detect_delay: 2.0}
+events:
+  - {t: 40, type: agent_failure, agent: 1}

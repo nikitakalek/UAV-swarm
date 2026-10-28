@@ -1,0 +1,21 @@
+# Демо MVP (docs/05): 3 аппарата, поле 200×150 м с бесполётной зоной, отказ аппарата 1.
+# Точки старта совпадают с HOMES для multi_sitl.sh: HOMES="0,0 4,0 8,0" — тот же файл
+# годится для PX4 SITL (`python -m swarmcore_node demo --vehicle mavsdk --time-scale 1`).
+schema_version: 1
+name: demo_field
+description: "Одна команда группе: облететь поле; отказ одного аппарата; остальные доделывают его часть"
+dt: 0.5
+t_end: 1200
+world:
+  size: [200, 150]
+  nofly: [[[90, 60], [120, 60], [120, 85], [90, 85]]]
+  targets: {count: 0}
+agents:
+  count: 3
+  homes: [[0, 0], [4, 0], [8, 0]]
+  speed: 5
+  altitude: 15
+  altitude_step: 4
+sensor: {swath_width: 20}
+mission: {n_cells: 12}
+allocator: {name: sector}
