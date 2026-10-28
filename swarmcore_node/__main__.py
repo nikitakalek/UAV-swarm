@@ -190,6 +190,19 @@ def main(argv=None) -> int:
     sp.add_argument("--timeout", type=float, default=1800.0)
     sp.add_argument("--quiet", action="store_true")
 
+    rp = sub.add_parser("replay", help="3D-повтор прогона: replay.json и replay.html в папке прогона")
+    rp.add_argument("run", help="папка прогона (например, runs/demo)")
+    rp.add_argument("--no-html", action="store_true", help="только replay.json")
+
+    def _replay(a):
+        from swarmcore_node.replay import write
+
+        for path in write(a.run, html=not a.no_html):
+            print(path)
+        return 0
+
+    rp.set_defaults(func=_replay)
+
     def _demo(a):
         from swarmcore_node.demo import run_demo
 

@@ -24,6 +24,9 @@ dev = ["pytest>=7"]
 swarmcore = "apps.cli:main"
 swarmnode = "swarmcore_node.__main__:main"
 
+[tool.setuptools.package-data]
+swarmcore_node = ["*.html"]
+
 [tool.setuptools.packages.find]
 include = ["swarmsim*", "apps*", "swarmcore_px4*", "swarmcore_node*"]
 
