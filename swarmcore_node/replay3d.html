@@ -1,0 +1,611 @@
+<title>Повтор миссии SwarmCore</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Пульт наблюдения за группой: 3D-сцена поля в центре, состояние бортов справа, шкала времени внизу. */
+:root {
+  --bg: #eef1ec;            /* фон пульта: светлый с зелёным оттенком поля */
+  --panel: #f8faf6;
+  --line: #cfd6cb;
+  --fg: #1d2620;
+  --muted: #5d6b61;
+  --accent: #c2621a;        /* сигнальный янтарь: события плана, активные элементы */
+  --scene-bg: #dfe6dd;
+  --ground: #c9d4bf;
+  --ground-out: #d6ddd0;
+  --grid: #b3c0aa;
+  --nofly: #c0392b;
+  --ok: #2e7d4f;
+  --warn: #b7791f;
+  --bad: #c0392b;
+  --info: #2b6cb0;
+  --font-ui: "Barlow Semi Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-num: "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1613; --panel: #151e1a; --line: #26332d; --fg: #e3ebe5; --muted: #8fa198;
+    --accent: #e8913f; --scene-bg: #0b110e; --ground: #1b2a20; --ground-out: #121b16; --grid: #2a3d31;
+    --nofly: #e05a4b; --ok: #4fbf7e; --warn: #e0a53f; --bad: #ee6a5a; --info: #6aa8ea;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1613; --panel: #151e1a; --line: #26332d; --fg: #e3ebe5; --muted: #8fa198;
+  --accent: #e8913f; --scene-bg: #0b110e; --ground: #1b2a20; --ground-out: #121b16; --grid: #2a3d31;
+  --nofly: #e05a4b; --ok: #4fbf7e; --warn: #e0a53f; --bad: #ee6a5a; --info: #6aa8ea;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 15px;
+  display: grid; grid-template-rows: auto 1fr auto; min-height: 0;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 10px; gap: 10px; box-sizing: border-box;
+}
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 18px; }
+header h1 { margin: 0; font-size: 22px; font-weight: 700; letter-spacing: 0.01em; text-wrap: balance; }
+header .sub { color: var(--muted); font-size: 14px; flex: 1 1 260px; min-width: 0; }
+.checks { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { display: inline-flex; align-items: center; gap: 6px; padding: 3px 9px; border-radius: 999px;
+  border: 1px solid var(--line); background: var(--panel); font-size: 13px; white-space: nowrap; }
+.chip i { width: 8px; height: 8px; border-radius: 50%; background: var(--ok); display: inline-block; }
+.chip.fail i { background: var(--bad); }
+
+main { display: grid; grid-template-columns: minmax(0, 1fr) 320px; gap: 10px; min-height: 0; }
+#view { position: relative; min-height: 0; border: 1px solid var(--line); border-radius: 6px; overflow: hidden;
+  background: var(--scene-bg); }
+#view canvas { display: block; width: 100%; height: 100%; }
+.cam { position: absolute; top: 8px; right: 8px; display: flex; gap: 4px; }
+.cam button, .tool { background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 4px 10px;
+  cursor: pointer; font-size: 13px; }
+.cam button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.legend { position: absolute; left: 8px; bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px 12px; font-size: 12px;
+  background: color-mix(in srgb, var(--panel) 88%, transparent); border: 1px solid var(--line); border-radius: 4px;
+  padding: 4px 8px; color: var(--muted); max-width: calc(100% - 16px); }
+.legend span { display: inline-flex; align-items: center; gap: 5px; }
+.legend b { width: 12px; height: 8px; display: inline-block; border-radius: 2px; }
+.tag { position: absolute; transform: translate(-50%, -100%); pointer-events: none; white-space: nowrap;
+  font-family: var(--font-num); font-size: 11px; padding: 2px 6px; border-radius: 3px;
+  background: color-mix(in srgb, var(--panel) 90%, transparent); border: 1px solid var(--line); color: var(--fg); }
+.tag.dead { color: var(--bad); border-color: var(--bad); }
+
+aside { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 10px; min-height: 0; }
+.agents { display: grid; gap: 6px; }
+.agent { display: grid; grid-template-columns: 14px 1fr auto; gap: 2px 8px; align-items: center; padding: 7px 9px;
+  background: var(--panel); border: 1px solid var(--line); border-radius: 6px; }
+.agent .sw { width: 12px; height: 12px; border-radius: 3px; grid-row: span 2; }
+.agent .nm { font-weight: 600; }
+.agent .det { grid-column: 2 / 4; color: var(--muted); font-family: var(--font-num); font-size: 12px;
+  overflow-wrap: anywhere; }
+.pill { font-size: 11px; font-weight: 600; letter-spacing: 0.06em; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid currentColor; }
+.m-NORMAL { color: var(--ok); } .m-DEGRADED { color: var(--warn); } .m-NO_GCS { color: var(--info); }
+.m-RTL { color: var(--info); } .m-DONE, .m-IDLE { color: var(--muted); } .m-FAIL { color: var(--bad); }
+.log { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; min-height: 0; display: flex;
+  flex-direction: column; }
+.log h2 { margin: 0; padding: 8px 10px 6px; font-size: 12px; font-weight: 600; letter-spacing: 0.08em;
+  text-transform: uppercase; color: var(--muted); border-bottom: 1px solid var(--line); }
+.log ol { list-style: none; margin: 0; padding: 4px 0; overflow-y: auto; min-height: 0; flex: 1; }
+.log li { display: grid; grid-template-columns: 56px 1fr; gap: 8px; padding: 4px 10px; font-size: 13px;
+  cursor: pointer; border-left: 3px solid transparent; }
+.log li time { font-family: var(--font-num); font-size: 12px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.log li.future { opacity: 0.38; }
+.log li.k-fail { border-left-color: var(--bad); }
+.log li.k-plan, .log li.k-lost { border-left-color: var(--accent); }
+.log li.now { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+footer { display: grid; grid-template-columns: auto auto 1fr auto auto; align-items: center; gap: 10px; }
+#play { min-width: 92px; font-weight: 600; background: var(--accent); color: var(--bg); border: 0; border-radius: 4px;
+  padding: 6px 12px; cursor: pointer; }
+#clock { font-family: var(--font-num); font-variant-numeric: tabular-nums; font-size: 13px; min-width: 112px; }
+.track { position: relative; height: 34px; min-width: 0; }
+.track input { position: absolute; inset: 9px 0 auto; width: 100%; margin: 0; accent-color: var(--accent); }
+.ticks { position: absolute; inset: 0; pointer-events: none; }
+.ticks span { position: absolute; top: 2px; width: 2px; height: 8px; transform: translateX(-1px); background: var(--muted); }
+.ticks span.k-fail { background: var(--bad); height: 30px; top: 2px; width: 3px; }
+.ticks span.k-plan { background: var(--accent); height: 30px; }
+.ticks span.k-done { background: var(--ok); top: 26px; height: 6px; }
+#file { display: none; }
+.err { color: var(--bad); padding: 12px; }
+
+@media (max-width: 760px) {
+  body { height: auto; display: flex; flex-direction: column; }
+  main { grid-template-columns: minmax(0, 1fr); }
+  #view { height: 58vh; min-height: 300px; }
+  aside { grid-template-rows: auto; }
+  .log ol { max-height: 260px; }
+  footer { grid-template-columns: auto 1fr auto; }
+  footer .track { grid-column: 1 / -1; order: 5; }
+}
+@media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+
+<header>
+  <h1>Повтор миссии SwarmCore</h1>
+  <div class="sub" id="sub">Загрузка данных прогона…</div>
+  <div class="checks" id="checks"></div>
+</header>
+
+<main>
+  <div id="view" aria-label="3D-сцена миссии">
+    <div class="cam" role="group" aria-label="Камера">
+      <button id="cam3d" aria-pressed="true">3D</button>
+      <button id="camTop" aria-pressed="false">Сверху</button>
+    </div>
+    <div class="legend" id="legend"></div>
+  </div>
+  <aside>
+    <div class="agents" id="agents"></div>
+    <section class="log">
+      <h2>События</h2>
+      <ol id="log"></ol>
+    </section>
+  </aside>
+</main>
+
+<footer>
+  <button id="play" aria-label="Пуск или пауза (пробел)">▶ Пуск</button>
+  <label><span class="sr" hidden>Скорость</span>
+    <select id="speed" aria-label="Скорость повтора">
+      <option value="1">1×</option><option value="5">5×</option><option value="10" selected>10×</option>
+      <option value="30">30×</option>
+    </select></label>
+  <div class="track">
+    <input id="scrub" type="range" min="0" max="1000" value="0" step="1" aria-label="Время миссии">
+    <div class="ticks" id="ticks"></div>
+  </div>
+  <div id="clock">t = 0,0 с</div>
+  <button class="tool" id="openBtn" title="Открыть replay.json другого прогона (например, с PX4 SITL)">Открыть…</button>
+  <input type="file" id="file" accept=".json,application/json">
+</footer>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const AGENT_COLORS = ["#2f7fd1", "#e0742d", "#8b5cc7", "#1f9e89", "#d14b7c", "#7a8f1f", "#3b4fc4", "#b0582a", "#178ab0", "#9c3fa8"];
+const DRONE_SCALE = 4;
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const $ = (id) => document.getElementById(id);
+const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const fmt = (t, d = 1) => t.toFixed(d).replace(".", ",");
+
+// ------------------------------------------------------------------ сцена
+const view = $("view");
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+view.prepend(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(42, 1, 0.5, 5000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.49;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x445544, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 1.2);
+sun.position.set(-80, 160, 60);
+scene.add(sun);
+
+let D = null, root = null, drones = [], cells = [], trails = [], tags = [], crash = [];
+let t = 0, playing = false, speed = 10, cx = 0, cy = 0, span = 100;
+const W = (x, y, z = 0) => new THREE.Vector3(x - cx, z, -(y - cy));  // мир (x — восток, y — север) → three
+
+function applyTheme() {
+  scene.background = new THREE.Color(css("--scene-bg"));
+  if (!root) return;
+  root.userData.ground.material.color.set(css("--ground"));
+  root.userData.outer.material.color.set(css("--ground-out"));
+  root.userData.grid.material.color.set(css("--grid"));
+  for (const m of root.userData.nofly) m.material.color.set(css("--nofly"));
+}
+new MutationObserver(applyTheme).observe(document.documentElement, { attributes: true, attributeFilter: ["data-theme"] });
+matchMedia("(prefers-color-scheme: dark)").addEventListener("change", applyTheme);
+
+function shapeOf(poly) {
+  const s = new THREE.Shape();
+  poly.forEach(([x, y], i) => (i ? s.lineTo(x - cx, y - cy) : s.moveTo(x - cx, y - cy)));
+  return s;
+}
+function flat(geom, h) {  // ShapeGeometry лежит в XY; кладём на землю
+  geom.rotateX(-Math.PI / 2);
+  geom.translate(0, h, 0);
+  return geom;
+}
+function line(points, color, opacity = 1) {
+  const g = new THREE.BufferGeometry().setFromPoints(points);
+  return new THREE.Line(g, new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity }));
+}
+
+function makeDrone(color) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.5, metalness: 0.2 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x2b2f2c, roughness: 0.7 });
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.35, 0.9), mat));
+  for (const r of [Math.PI / 4, -Math.PI / 4]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.12, 0.16), dark);
+    arm.rotation.y = r;
+    g.add(arm);
+  }
+  const rotors = [];
+  for (const [dx, dz] of [[0.92, 0.92], [-0.92, 0.92], [0.92, -0.92], [-0.92, -0.92]]) {
+    const rot = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 20),
+      new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.55 }));
+    rot.position.set(dx, 0.22, dz);
+    g.add(rot);
+    rotors.push(rot);
+  }
+  g.scale.setScalar(DRONE_SCALE);
+  g.userData = { mat, rotors };
+  return g;
+}
+
+function build(data) {
+  D = data;
+  if (root) scene.remove(root);
+  root = new THREE.Group();
+  scene.add(root);
+  drones = []; cells = []; trails = []; crash = [];
+  for (const el of tags) el.remove();
+  tags = [];
+
+  const xs = D.world.bounds.map((p) => p[0]), ys = D.world.bounds.map((p) => p[1]);
+  const [x0, x1, y0, y1] = [Math.min(...xs), Math.max(...xs), Math.min(...ys), Math.max(...ys)];
+  cx = (x0 + x1) / 2; cy = (y0 + y1) / 2; span = Math.max(x1 - x0, y1 - y0);
+
+  const outer = new THREE.Mesh(flat(new THREE.PlaneGeometry(span * 4, span * 4), -0.05),
+    new THREE.MeshStandardMaterial({ color: css("--ground-out"), roughness: 1 }));
+  const ground = new THREE.Mesh(flat(new THREE.ShapeGeometry(shapeOf(D.world.bounds)), 0),
+    new THREE.MeshStandardMaterial({ color: css("--ground"), roughness: 1 }));
+  root.add(outer, ground);
+  const gp = [];
+  for (let x = Math.ceil(x0 / 10) * 10; x <= x1; x += 10) gp.push(W(x, y0, 0.02), W(x, y1, 0.02));
+  for (let y = Math.ceil(y0 / 10) * 10; y <= y1; y += 10) gp.push(W(x0, y, 0.02), W(x1, y, 0.02));
+  const grid = new THREE.LineSegments(new THREE.BufferGeometry().setFromPoints(gp),
+    new THREE.LineBasicMaterial({ color: css("--grid") }));
+  root.add(grid);
+  root.add(line([...D.world.bounds, D.world.bounds[0]].map(([x, y]) => W(x, y, 0.05)), 0x556655));
+
+  // ячейки миссии: заливка по владельцу, «змейка» галсов
+  for (const task of D.tasks) {
+    const fill = new THREE.Mesh(flat(new THREE.ShapeGeometry(shapeOf(task.poly)), 0.06),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.2, depthWrite: false }));
+    const edge = line([...task.poly, task.poly[0]].map(([x, y]) => W(x, y, 0.08)), 0xffffff, 0.5);
+    const sweep = line(task.wps.map(([x, y]) => W(x, y, 0.1)), 0xffffff, 0.35);
+    root.add(fill, edge, sweep);
+    const moves = D.moves.filter((m) => m.task === task.id);
+    cells.push({ task, fill, edge, sweep, moves });
+  }
+
+  // бесполётные зоны — объём до 35 м
+  root.userData.nofly = [];
+  for (const z of D.world.nofly) {
+    const geo = new THREE.ExtrudeGeometry(shapeOf(z), { depth: 35, bevelEnabled: false });
+    geo.rotateX(-Math.PI / 2);
+    const mesh = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: css("--nofly"), transparent: true,
+      opacity: 0.22, depthWrite: false }));
+    const edges = new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: css("--nofly") }));
+    root.add(mesh, edges);
+    root.userData.nofly.push(mesh, edges);
+  }
+
+  // аппараты, хвосты траекторий, отвесы, базы
+  for (let i = 0; i < D.meta.n; i++) {
+    const color = AGENT_COLORS[i % AGENT_COLORS.length];
+    const [hx, hy] = D.world.homes[i];
+    const pad = new THREE.Mesh(flat(new THREE.RingGeometry(1.6, 2.4, 32), 0.07),
+      new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+    pad.position.add(W(hx, hy));
+    const drone = makeDrone(color);
+    const tr = D.tracks[String(i)];
+    const pts = new Float32Array((tr.t.length + 2) * 3);
+    const trailGeo = new THREE.BufferGeometry();
+    trailGeo.setAttribute("position", new THREE.BufferAttribute(pts, 3));
+    const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color }));
+    trail.frustumCulled = false;
+    const stem = line([new THREE.Vector3(), new THREE.Vector3(0, -1, 0)], color, 0.6);
+    const shadow = new THREE.Mesh(flat(new THREE.CircleGeometry(1.8, 24), 0.09),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.35, depthWrite: false }));
+    root.add(pad, drone, trail, stem, shadow);
+    const fail = D.fails.find((f) => f.agent === i);
+    drones.push({ i, color, drone, trail, stem, shadow, fail, tr });
+    const tag = document.createElement("div");
+    tag.className = "tag";
+    view.append(tag);
+    tags.push(tag);
+    if (fail) {
+      const x = new THREE.Group();
+      for (const r of [Math.PI / 4, -Math.PI / 4]) {
+        const b = new THREE.Mesh(new THREE.BoxGeometry(9, 0.3, 1.4), new THREE.MeshBasicMaterial({ color: css("--bad") }));
+        b.rotation.y = r;
+        x.add(b);
+      }
+      x.visible = false;
+      root.add(x);
+      crash.push({ i, x });
+    }
+  }
+  root.userData = { ...root.userData, ground, outer, grid };
+  applyTheme();
+  setCamera("3d");
+  buildUi();
+  seek(D.meta.t0);
+}
+
+function setCamera(kind) {
+  $("cam3d").setAttribute("aria-pressed", String(kind === "3d"));
+  $("camTop").setAttribute("aria-pressed", String(kind === "top"));
+  // расстояние, при котором поле целиком помещается в кадр при текущих пропорциях окна
+  const vHalf = THREE.MathUtils.degToRad(camera.fov / 2);
+  const hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
+  const dist = (span * 0.55) / Math.sin(Math.min(vHalf, hHalf));
+  controls.target.set(0, 6, 0);
+  const dir = kind === "top" ? new THREE.Vector3(0, 1, 0.001) : new THREE.Vector3(-0.42, 0.62, 0.66);
+  camera.position.copy(dir.normalize().multiplyScalar(dist)).add(controls.target);
+  controls.update();
+}
+
+// ------------------------------------------------------------------ состояние во времени
+function at(tr, now) {  // интерполяция трека; null — ещё нет данных
+  const ts = tr.t;
+  if (!ts.length || now < ts[0]) return null;
+  let lo = 0, hi = ts.length - 1;
+  if (now >= ts[hi]) return { k: hi, x: tr.x[hi], y: tr.y[hi], z: tr.z[hi], end: true };
+  while (hi - lo > 1) { const m = (lo + hi) >> 1; (ts[m] <= now ? (lo = m) : (hi = m)); }
+  const f = (now - ts[lo]) / Math.max(ts[hi] - ts[lo], 1e-6);
+  return { k: lo, x: tr.x[lo] + (tr.x[hi] - tr.x[lo]) * f, y: tr.y[lo] + (tr.y[hi] - tr.y[lo]) * f,
+    z: tr.z[lo] + (tr.z[hi] - tr.z[lo]) * f, end: false };
+}
+function ownerAt(cell, now) {
+  let o = cell.task.owner0;
+  for (const m of cell.moves) if (m.t <= now) o = m.to;
+  return o;
+}
+
+const tmp = new THREE.Vector3();
+function update(now, clock) {
+  for (const c of cells) {
+    const o = ownerAt(c, now);
+    const done = c.task.t_done != null && c.task.t_done <= now;
+    const col = o == null ? "#888888" : AGENT_COLORS[o % AGENT_COLORS.length];
+    c.fill.material.color.set(col);
+    c.fill.material.opacity = done ? 0.58 : 0.18;
+    c.sweep.material.color.set(done ? "#ffffff" : col);
+    c.sweep.material.opacity = done ? 0.55 : 0.28;
+    const recent = c.moves.some((m) => now >= m.t && now - m.t < 6);
+    c.edge.material.color.set(recent ? css("--accent") : "#ffffff");
+    c.edge.material.opacity = recent ? 0.6 + 0.4 * Math.sin(clock * 8) : 0.45;
+  }
+  const rect = view.getBoundingClientRect();
+  for (const d of drones) {
+    const s = at(d.tr, now);
+    const failed = d.fail && now >= d.fail.t;
+    let p;
+    if (!s) p = { x: D.world.homes[d.i][0], y: D.world.homes[d.i][1], z: 0 };
+    else p = { ...s };
+    let fallen = false;
+    if (failed && s && s.end) {  // после отказа телеметрии нет: аппарат падает с последней точки
+      const k = Math.min((now - d.tr.t[d.tr.t.length - 1]) / 3, 1);
+      p.z = s.z * (1 - k * k);
+      fallen = k >= 1;
+    }
+    d.drone.position.copy(W(p.x, p.y, p.z + 0.6));
+    d.drone.rotation.set(failed ? 0.5 : 0, 0, failed ? 0.35 : 0);
+    d.drone.userData.mat.color.set(failed ? "#6b6f6c" : d.color);
+    if (!reduced && !failed && p.z > 0.5) for (const r of d.drone.userData.rotors) r.rotation.y += 0.9;
+    d.stem.geometry.setFromPoints([W(p.x, p.y, p.z), W(p.x, p.y, 0.1)]);
+    d.shadow.position.copy(W(p.x, p.y, 0)).setY(0);
+    d.shadow.visible = p.z > 0.5;
+    // хвост траектории: все точки до текущего момента + интерполированная
+    const arr = d.trail.geometry.attributes.position.array;
+    let n = 0;
+    if (s) {
+      for (let k = 0; k <= s.k; k++, n++) {
+        tmp.copy(W(d.tr.x[k], d.tr.y[k], d.tr.z[k]));
+        arr[n * 3] = tmp.x; arr[n * 3 + 1] = tmp.y; arr[n * 3 + 2] = tmp.z;
+      }
+      tmp.copy(W(p.x, p.y, p.z));
+      arr[n * 3] = tmp.x; arr[n * 3 + 1] = tmp.y; arr[n * 3 + 2] = tmp.z; n++;
+    }
+    d.trail.geometry.setDrawRange(0, n);
+    d.trail.geometry.attributes.position.needsUpdate = true;
+    const cr = crash.find((c) => c.i === d.i);
+    if (cr) { cr.x.visible = fallen; cr.x.position.copy(W(p.x, p.y, 0.15)); }
+    // подпись над аппаратом
+    tmp.copy(d.drone.position).add(new THREE.Vector3(0, 5, 0)).project(camera);
+    const tag = tags[d.i];
+    const visible = tmp.z < 1;
+    tag.hidden = !visible;
+    if (visible) {
+      tag.style.left = `${((tmp.x + 1) / 2) * rect.width}px`;
+      tag.style.top = `${((1 - tmp.y) / 2) * rect.height}px`;
+      tag.textContent = failed ? `#${d.i} отказ` : `#${d.i} · ${Math.round(p.z)} м`;
+      tag.classList.toggle("dead", !!failed);
+    }
+  }
+}
+
+// ------------------------------------------------------------------ панель и шкала
+function buildUi() {
+  const m = D.meta;
+  const realloc = Object.values(m.realloc_s || {}).filter((v) => v != null);
+  $("sub").textContent = `${m.description || m.name}. ${m.n} аппарата, ${m.n_tasks} ячеек, скорость ${m.speed} м/с.`;
+  const labels = {
+    "все задачи выполнены": `${m.n_tasks}/${m.n_tasks} задач`,
+    "нет дублей": "дублей нет",
+    "перераспределение ≤ 5 с": realloc.length ? `новый план через ${fmt(Math.max(...realloc))} с` : "без отказов",
+    "разнос по высоте ≥ 3 м": `разнос по высоте ${fmt(m.min_vertical_sep_m ?? 0, 0)} м`,
+  };
+  $("checks").innerHTML = "";
+  for (const [k, ok] of Object.entries(m.checks || {})) {
+    const c = document.createElement("span");
+    c.className = "chip" + (ok ? "" : " fail");
+    c.title = k;
+    c.innerHTML = "<i></i>";
+    c.append(labels[k] || k);
+    $("checks").append(c);
+  }
+  $("legend").innerHTML = "";
+  D.world.altitudes.forEach((alt, i) => {
+    const s = document.createElement("span");
+    s.innerHTML = `<b style="background:${AGENT_COLORS[i % AGENT_COLORS.length]}"></b>`;
+    s.append(`аппарат ${i} · ${alt} м`);
+    $("legend").append(s);
+  });
+  if (D.world.nofly.length) {
+    const s = document.createElement("span");
+    s.innerHTML = `<b style="background:var(--nofly)"></b>`;
+    s.append("бесполётная зона");
+    $("legend").append(s);
+  }
+  $("agents").innerHTML = "";
+  for (let i = 0; i < m.n; i++) {
+    const a = document.createElement("div");
+    a.className = "agent";
+    a.innerHTML = `<span class="sw" style="background:${AGENT_COLORS[i % AGENT_COLORS.length]}"></span>
+      <span class="nm">Аппарат ${i}</span><span class="pill"></span><span class="det"></span>`;
+    $("agents").append(a);
+  }
+  $("log").innerHTML = "";
+  for (const e of D.events) {
+    const li = document.createElement("li");
+    li.className = `k-${e.kind}`;
+    li.dataset.t = e.t;
+    li.innerHTML = `<time>${fmt(e.t)} с</time><span></span>`;
+    li.lastChild.textContent = e.text;
+    li.addEventListener("click", () => seek(Math.max(m.t0, e.t - 2)));
+    $("log").append(li);
+  }
+  $("ticks").innerHTML = "";
+  for (const e of D.events) {
+    if (!["fail", "plan", "done"].includes(e.kind)) continue;
+    const s = document.createElement("span");
+    s.className = `k-${e.kind}`;
+    s.style.left = `${((e.t - m.t0) / (m.t_end - m.t0)) * 100}%`;
+    s.title = `${fmt(e.t)} с — ${e.text}`;
+    $("ticks").append(s);
+  }
+}
+
+let lastPanel = -1;
+function updatePanel(now) {
+  if (Math.abs(now - lastPanel) < 0.2) return;
+  lastPanel = now;
+  const doneCount = D.tasks.filter((x) => x.t_done != null && x.t_done <= now);
+  [...$("agents").children].forEach((el, i) => {
+    const d = drones[i];
+    const s = at(d.tr, now);
+    const failed = d.fail && now >= d.fail.t;
+    const mode = failed ? "FAIL" : s ? d.tr.mode[s.k] : "IDLE";
+    const pill = el.querySelector(".pill");
+    pill.className = `pill m-${mode}`;
+    pill.textContent = failed ? "ОТКАЗ" : mode;
+    const cur = s ? d.tr.cur[s.k] : "";
+    const mine = doneCount.filter((x) => x.done_by === i).length;
+    const alt = s ? Math.round(s.z) : 0;
+    el.querySelector(".det").textContent = failed ? `нет связи с ${fmt(d.fail.t)} с · сделано ${mine}`
+      : `${alt} м · ${cur ? cur.replace("cell_", "ячейка ") : (s ? d.tr.st[s.k] || "—" : "на земле")} · сделано ${mine}`;
+  });
+  let lastPast = null;
+  for (const li of $("log").children) {
+    const past = Number(li.dataset.t) <= now;
+    li.classList.toggle("future", !past);
+    li.classList.remove("now");
+    if (past) lastPast = li;
+  }
+  if (lastPast) {
+    lastPast.classList.add("now");
+    const ol = $("log"), top = lastPast.offsetTop - ol.offsetTop;
+    if (top < ol.scrollTop || top > ol.scrollTop + ol.clientHeight - 30) ol.scrollTop = top - ol.clientHeight / 2;
+  }
+  $("clock").textContent = `t = ${fmt(now)} с · ${doneCount.length}/${D.meta.n_tasks}`;
+  $("scrub").value = String(Math.round(((now - D.meta.t0) / (D.meta.t_end - D.meta.t0)) * 1000));
+}
+
+function seek(v) {
+  t = Math.min(Math.max(v, D.meta.t0), D.meta.t_end);
+  lastPanel = -1;
+}
+function setPlaying(on) {
+  playing = on;
+  $("play").textContent = on ? "❚❚ Пауза" : "▶ Пуск";
+}
+$("play").addEventListener("click", () => {
+  if (!D) return;
+  if (!playing && t >= D.meta.t_end) seek(D.meta.t0);
+  setPlaying(!playing);
+});
+$("speed").addEventListener("change", (e) => (speed = Number(e.target.value)));
+$("scrub").addEventListener("input", (e) => D && seek(D.meta.t0 + (Number(e.target.value) / 1000) * (D.meta.t_end - D.meta.t0)));
+$("cam3d").addEventListener("click", () => setCamera("3d"));
+$("camTop").addEventListener("click", () => setCamera("top"));
+$("openBtn").addEventListener("click", () => $("file").click());
+$("file").addEventListener("change", async (e) => {
+  const f = e.target.files[0];
+  if (!f) return;
+  try { build(JSON.parse(await f.text())); setPlaying(false); }
+  catch (err) { $("sub").textContent = `Не удалось открыть ${f.name}: это не replay.json (${err.message}).`; }
+});
+addEventListener("keydown", (e) => {
+  if (e.code === "Space" && e.target.tagName !== "SELECT" && e.target.tagName !== "INPUT") {
+    e.preventDefault();
+    $("play").click();
+  }
+});
+
+function resize() {
+  const r = view.getBoundingClientRect();
+  renderer.setSize(r.width, r.height, false);
+  camera.aspect = r.width / Math.max(r.height, 1);
+  camera.updateProjectionMatrix();
+}
+new ResizeObserver(resize).observe(view);
+
+let prev = performance.now();
+function frame(now) {
+  const dt = Math.min((now - prev) / 1000, 0.1);
+  prev = now;
+  if (D) {
+    if (playing) {
+      t += dt * speed;
+      if (t >= D.meta.t_end) { t = D.meta.t_end; setPlaying(false); }
+    }
+    update(t, now / 1000);
+    updatePanel(t);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(frame);
+}
+
+async function load() {
+  try {
+    const data = window.REPLAY_DATA || await (await fetch("replay.json")).json();
+    build(data);
+    // открываемся на моменте сразу после отказа — видно и разделение, и передачу работы
+    const f = data.fails[0];
+    seek(f ? f.t + 8 : data.meta.t0);
+    if (!reduced) setPlaying(true);
+  } catch (err) {
+    $("sub").textContent = "Нет данных прогона. Нажмите «Открыть…» и выберите replay.json "
+      + "(python -m swarmcore_node replay runs/demo).";
+  }
+  resize();
+  if (D) setCamera("3d");
+  requestAnimationFrame(frame);
+}
+load();
+</script>
