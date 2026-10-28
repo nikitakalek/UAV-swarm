@@ -33,9 +33,15 @@ class GroundStation:
         self.status: dict[int, dict[str, Any]] = {}
         self.last_seen: dict[int, float] = {}
         self.acked: set[int] = set()
-        self.records: list[dict[str, Any]] = []  # heartbeat узлов: (t, src, payload)
+        self.records: list[dict[str, Any]] = []  # heartbeat узлов: (t, src, payload), без ленты событий
         self.events: list[dict[str, Any]] = []  # действия станции
-        self._cmds: list[list[Any]] = []
+        self._cmds: list[dict[str, Any]] = []  # активные команды: рассылаются, пока не истечёт cmd_ttl
+        self.cmd_ttl = 3.0
+        self._cmd_n = 0
+        self.plan: Optional[dict[str, Any]] = None  # последний план лидера
+        self.updates: list[dict[str, Any]] = []  # ревизии миссии (новые зоны и участки), в метрах
+        self.feed: list[dict[str, Any]] = []  # события узлов без повторов: src, seq, t, type, data
+        self._feed_seen: set[tuple[int, int]] = set()
         self._last_hb = -math.inf
 
     @property
@@ -43,27 +49,37 @@ class GroundStation:
         return self.scenario.agents.count
 
     def command(self, cmd: str) -> None:
-        self._cmds.append([cmd, self.cmd_repeats])
+        """Команда группе. Повторяется в каждом heartbeat станции ``cmd_ttl`` секунд; узлы исполняют её один раз."""
+        self._cmd_n += 1
+        self._cmds.append({"id": f"{self.mission_id}-{self._cmd_n}", "cmd": cmd, "until": self.t + self.cmd_ttl})
         self.events.append({"t": round(self.t, 3), "type": "command", "cmd": cmd})
 
     def step(self, now: float) -> None:
         self.t = now
         for m in self.link.recv():
+            if m.kind == "plan" and m.mission_id == self.mission_id:
+                if self.plan is None or m.payload["version"] > self.plan["version"]:
+                    self.plan = m.payload
+                continue
             if m.kind == "hb" and 0 <= m.src < self.n:
+                for e in m.payload.get("ev", []):
+                    key = (m.src, e["seq"])
+                    if key not in self._feed_seen:
+                        self._feed_seen.add(key)
+                        self.feed.append({"src": m.src, **e})
                 self.status[m.src] = m.payload
                 self.last_seen[m.src] = now
-                self.records.append({"t": round(now, 3), "src": m.src, **m.payload})
+                self.records.append({"t": round(now, 3), "src": m.src,
+                                     **{k: v for k, v in m.payload.items() if k != "ev"}})
                 if m.mission_id == self.mission_id:
                     self.acked.add(m.src)
         if self.silent or now - self._last_hb < self.hb_period - 1e-9:
             return
         self._last_hb = now
-        payload: dict[str, Any] = {}
-        if self._cmds:
-            payload["cmd"] = self._cmds[0][0]
-            self._cmds[0][1] -= 1
-            if self._cmds[0][1] <= 0:
-                self._cmds.pop(0)
+        self._cmds = [c for c in self._cmds if c["until"] >= now]
+        payload: dict[str, Any] = {"cmds": [{"id": c["id"], "cmd": c["cmd"]} for c in self._cmds]}
+        if self.updates:  # ревизии повторяются в каждом heartbeat: узел применит недостающие
+            payload.update({"mission_id": self.mission_id, "updates": self.updates})
         self.seq += 1
         self.link.send(Msg(kind="gcs_hb", src=GCS_ID, seq=self.seq, t=now, payload=payload))
         if len(self.acked) < self.n:
@@ -78,13 +94,23 @@ class GroundStation:
             return False
         return all(self.status[i].get("mode") == "DONE" for i in live) and self.tasks_left() == 0
 
+    def add_update(self, upd: dict[str, Any]) -> int:
+        """Новая ревизия миссии: ``{"nofly": [...], "areas": [...]}`` в метрах. Возвращает номер."""
+        rev = len(self.updates) + 1
+        self.updates.append({"rev": rev, "nofly": upd.get("nofly", []), "areas": upd.get("areas", [])})
+        self.events.append({"t": round(self.t, 3), "type": "mission_update", "rev": rev})
+        return rev
+
     def tasks_left(self) -> Optional[int]:
-        done: set[str] = set()
+        """Сколько задач ещё не сделано и не отменено (по самому свежему составу задач)."""
+        closed: set[str] = set()
         total = None
         for st in self.status.values():
-            done.update(st.get("done", []))
-            total = st.get("n_tasks", total)
-        return None if total is None else total - len(done)
+            closed.update(st.get("done", []))
+            closed.update(st.get("cancelled", []))
+            if st.get("rev", 0) == len(self.updates) and st.get("n_tasks") is not None:
+                total = max(total or 0, st["n_tasks"])
+        return None if total is None else total - len(closed)
 
     def table(self) -> str:
         rows = [f"t={self.t:7.1f}  осталось задач: {self.tasks_left()}"]
@@ -107,6 +133,6 @@ class GroundStation:
             for r in self.records:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         with open(out / "gcs_events.json", "w") as f:
-            json.dump({"mission_id": self.mission_id, "events": self.events,
+            json.dump({"mission_id": self.mission_id, "events": self.events, "updates": self.updates,
                        "scenario": self.scenario.model_dump(mode="json")}, f, ensure_ascii=False, indent=1)
         return out

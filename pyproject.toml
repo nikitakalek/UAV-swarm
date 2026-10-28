@@ -23,12 +23,14 @@ dev = ["pytest>=7"]
 [project.scripts]
 swarmcore = "apps.cli:main"
 swarmnode = "swarmcore_node.__main__:main"
+swarmgcs = "swarmcore_gcs.__main__:main"
 
 [tool.setuptools.package-data]
 swarmcore_node = ["*.html"]
+swarmcore_gcs = ["static/*.html"]
 
 [tool.setuptools.packages.find]
-include = ["swarmsim*", "apps*", "swarmcore_px4*", "swarmcore_node*"]
+include = ["swarmsim*", "apps*", "swarmcore_px4*", "swarmcore_node*", "swarmcore_gcs*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

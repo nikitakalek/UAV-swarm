@@ -95,6 +95,10 @@ def analyze(out: str | Path) -> dict[str, Any]:
     out = Path(out)
     meta, hbs, events = _load(out)
     n_tasks = max((h.get("n_tasks", 0) for h in hbs), default=0)
+    cancelled = set()
+    for h in hbs:
+        cancelled.update(h.get("cancelled", []))
+    n_tasks -= len(cancelled)  # ячейки, отменённые новой бесполётной зоной, не считаются
     done = set()
     for h in hbs:
         done.update(h.get("done", []))

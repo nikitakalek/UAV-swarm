@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>3D-вид SwarmCore</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Второй экран: живая 3D-сцена во весь экран, сверху — сводка, слева внизу — последние события. */
+:root {
+  --bg: #0f1613; --panel: rgba(17, 25, 21, 0.82); --line: #2c3b33; --fg: #e3ebe5; --muted: #9fb1a7;
+  --accent: #e8913f; --ok: #4fbf7e; --warn: #e0a53f; --bad: #ee6a5a; --info: #6aa8ea; --nofly: #e05a4b;
+  --font-ui: "Barlow Semi Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-num: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  color-scheme: dark;  /* экран наблюдения всегда тёмный: снимок и аппараты читаются лучше */
+}
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; overflow: hidden; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 15px; }
+#view { position: fixed; inset: 0; }
+#view canvas { display: block; width: 100%; height: 100%; }
+.hud { position: fixed; z-index: 2; background: var(--panel); border: 1px solid var(--line); border-radius: 6px;
+  backdrop-filter: blur(4px); }
+.top { top: max(12px, env(safe-area-inset-top, 0px)); left: max(12px, env(safe-area-inset-left, 0px));
+  right: max(12px, env(safe-area-inset-right, 0px)); display: flex; flex-wrap: wrap; align-items: center;
+  gap: 8px 18px; padding: 8px 14px; }
+.top h1 { margin: 0; font-size: 20px; font-weight: 700; }
+.top .kv { font-family: var(--font-num); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.top .kv b { color: var(--fg); font-weight: 600; }
+.top .spacer { flex: 1; }
+.state { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; padding: 2px 9px;
+  border-radius: 999px; border: 1px solid currentColor; color: var(--muted); }
+.state.running { color: var(--ok); }
+.btn { background: transparent; border: 1px solid var(--line); color: var(--fg); border-radius: 4px; padding: 3px 10px;
+  cursor: pointer; font: inherit; font-size: 13px; }
+.btn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+.bar { width: 160px; height: 6px; background: #26332d; border-radius: 999px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--ok); width: 0; transition: width 0.4s; }
+.feed { left: max(12px, env(safe-area-inset-left, 0px)); bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  width: min(440px, calc(100% - 24px)); padding: 6px 0; list-style: none; margin: 0; }
+.feed li { display: grid; grid-template-columns: 46px 1fr; gap: 6px; padding: 3px 12px; font-size: 14px;
+  border-left: 3px solid transparent; }
+.feed time { font-family: var(--font-num); font-size: 12px; color: var(--muted); }
+.feed .k-fail { border-left-color: var(--bad); } .feed .k-plan { border-left-color: var(--accent); }
+.feed .k-warn { border-left-color: var(--warn); } .feed .k-cmd { border-left-color: var(--info); }
+.legend { right: max(12px, env(safe-area-inset-right, 0px)); bottom: max(12px, env(safe-area-inset-bottom, 0px));
+  padding: 8px 12px; display: grid; gap: 4px; font-size: 13px; }
+.legend div { display: flex; align-items: center; gap: 8px; }
+.legend b { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
+.legend .mode { font-family: var(--font-num); font-size: 11px; color: var(--muted); margin-left: auto; padding-left: 10px; }
+.tag { position: fixed; z-index: 1; transform: translate(-50%, -100%); pointer-events: none; white-space: nowrap;
+  font-family: var(--font-num); font-size: 11px; padding: 2px 6px; border-radius: 3px; background: var(--panel);
+  border: 1px solid var(--line); }
+.tag.dead { color: var(--bad); border-color: var(--bad); }
+.wait { position: fixed; inset: 0; display: grid; place-items: center; z-index: 3; font-size: 18px; color: var(--muted);
+  text-align: center; padding: 24px; }
+</style>
+</head>
+<body>
+<div id="view"></div>
+<div class="hud top">
+  <h1>SwarmCore · 3D</h1>
+  <span class="state" id="state">ожидание</span>
+  <span class="kv">t <b id="clock">0:00</b></span>
+  <span class="kv">ячейки <b id="done">0/0</b></span>
+  <div class="bar"><i id="progress"></i></div>
+  <span class="kv" id="planv"></span>
+  <span class="spacer"></span>
+  <button class="btn" id="layer" aria-pressed="false" title="Подложка: спутник или схема">Схема</button>
+  <button class="btn" id="cam3d" aria-pressed="true">3D</button>
+  <button class="btn" id="camTop" aria-pressed="false">Сверху</button>
+  <button class="btn" id="camFollow" aria-pressed="false" title="Камера следует за лидером">За лидером</button>
+</div>
+<ol class="hud feed" id="feed" hidden></ol>
+<div class="hud legend" id="legend" hidden></div>
+<div class="wait" id="wait">Ждём миссию с пульта оператора…<br>Разметьте участок и нажмите «Запуск миссии».</div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from "three";
+import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+
+const COLORS = ["#2f7fd1", "#e0742d", "#8b5cc7", "#1f9e89", "#d14b7c", "#7a8f1f", "#3b4fc4", "#b0582a", "#178ab0", "#9c3fa8"];
+const $ = (id) => document.getElementById(id);
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmtT = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+const DRONE_SCALE = 3.2, MARGIN = 120;
+
+// ------------------------------------------------------------------ сцена
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+$("view").append(renderer.domElement);
+const scene = new THREE.Scene();
+scene.background = new THREE.Color("#0b110e");
+scene.fog = new THREE.Fog("#0b110e", 600, 1600);
+const camera = new THREE.PerspectiveCamera(42, 1, 0.5, 6000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.49;
+scene.add(new THREE.HemisphereLight(0xffffff, 0x334433, 1.1));
+const sun = new THREE.DirectionalLight(0xffffff, 1.3);
+sun.position.set(-120, 220, 80);
+scene.add(sun);
+
+let G = null, root = null, ground = null, layer = "sat", cells = {}, drones = [], tags = [], span = 100, cx = 0, cy = 0;
+let follow = false, camKind = "3d";
+const W = (x, y, z = 0) => new THREE.Vector3(x - cx, z, -(y - cy));
+const flat = (g, h) => { g.rotateX(-Math.PI / 2); g.translate(0, h, 0); return g; };
+function shapeOf(poly) {
+  const s = new THREE.Shape();
+  poly.forEach(([x, y], i) => (i ? s.lineTo(x - cx, y - cy) : s.moveTo(x - cx, y - cy)));
+  return s;
+}
+function line(points, color, opacity = 1) {
+  return new THREE.Line(new THREE.BufferGeometry().setFromPoints(points),
+    new THREE.LineBasicMaterial({ color, transparent: opacity < 1, opacity }));
+}
+
+// ------------------------------------------------------------------ подложка из тайлов карты
+const R = 6378137;
+function toLL(x, y) {  // та же проекция, что на сервере (swarmcore_gcs/geo.py)
+  const [lat0, lon0] = G.origin, k = Math.PI / 180;
+  return [lat0 + y / (k * R), lon0 + x / (k * R * Math.cos(lat0 * k))];
+}
+function toXY(lat, lon) {
+  const [lat0, lon0] = G.origin, k = Math.PI / 180;
+  return [(lon - lon0) * k * R * Math.cos(lat0 * k), (lat - lat0) * k * R];
+}
+const tileX = (lon, z) => ((lon + 180) / 360) * 2 ** z;
+const tileY = (lat, z) => { const r = (lat * Math.PI) / 180; return ((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2) * 2 ** z; };
+const tileLon = (x, z) => (x / 2 ** z) * 360 - 180;
+const tileLat = (y, z) => { const n = Math.PI - (2 * Math.PI * y) / 2 ** z; return (180 / Math.PI) * Math.atan(0.5 * (Math.exp(n) - Math.exp(-n))); };
+
+async function groundTexture(x0, y0, x1, y1, which, z) {
+  const [latA, lonA] = toLL(x0, y0), [latB, lonB] = toLL(x1, y1);
+  const tx0 = Math.floor(tileX(lonA, z)), tx1 = Math.floor(tileX(lonB, z));
+  const ty0 = Math.floor(tileY(latB, z)), ty1 = Math.floor(tileY(latA, z));
+  const ppm = Math.min(3, 4096 / Math.max(x1 - x0, y1 - y0));  // пикселей на метр
+  const cv = document.createElement("canvas");
+  cv.width = Math.round((x1 - x0) * ppm); cv.height = Math.round((y1 - y0) * ppm);
+  const ctx = cv.getContext("2d");
+  ctx.fillStyle = "#26302a"; ctx.fillRect(0, 0, cv.width, cv.height);
+  const jobs = [];
+  for (let tx = tx0; tx <= tx1; tx++) for (let ty = ty0; ty <= ty1; ty++) {
+    jobs.push(new Promise((res) => {
+      const img = new Image();
+      img.onload = () => {
+        const [ax, ay] = toXY(tileLat(ty, z), tileLon(tx, z)), [bx, by] = toXY(tileLat(ty + 1, z), tileLon(tx + 1, z));
+        ctx.drawImage(img, (ax - x0) * ppm, (y1 - ay) * ppm, (bx - ax) * ppm, (ay - by) * ppm);
+        res();
+      };
+      img.onerror = res;
+      img.src = `/tiles/${which}/${z}/${tx}/${ty}`;
+    }));
+  }
+  await Promise.all(jobs);
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+  return tex;
+}
+async function setGround() {
+  if (!G) return;
+  const xs = G.bounds_xy.map((p) => p[0]), ys = G.bounds_xy.map((p) => p[1]);
+  const x0 = Math.min(...xs) - MARGIN, x1 = Math.max(...xs) + MARGIN, y0 = Math.min(...ys) - MARGIN, y1 = Math.max(...ys) + MARGIN;
+  const z = Math.max(x1 - x0, y1 - y0) > 900 ? 16 : Math.max(x1 - x0, y1 - y0) > 450 ? 17 : 18;
+  const tex = await groundTexture(x0, y0, x1, y1, layer, z);
+  if (ground) { root.remove(ground); ground.geometry.dispose(); ground.material.map?.dispose(); }
+  ground = new THREE.Mesh(flat(new THREE.PlaneGeometry(x1 - x0, y1 - y0), 0),
+    new THREE.MeshBasicMaterial({ map: tex }));
+  ground.position.add(W((x0 + x1) / 2, (y0 + y1) / 2));
+  root.add(ground);
+}
+
+function makeDrone(color) {
+  const g = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color, roughness: 0.45, metalness: 0.2, emissive: color, emissiveIntensity: 0.25 });
+  const dark = new THREE.MeshStandardMaterial({ color: 0x222622, roughness: 0.7 });
+  g.add(new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.35, 0.9), mat));
+  for (const r of [Math.PI / 4, -Math.PI / 4]) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.12, 0.16), dark);
+    arm.rotation.y = r; g.add(arm);
+  }
+  const rotors = [];
+  for (const [dx, dz] of [[0.92, 0.92], [-0.92, 0.92], [0.92, -0.92], [-0.92, -0.92]]) {
+    const rot = new THREE.Mesh(new THREE.CylinderGeometry(0.55, 0.55, 0.04, 20),
+      new THREE.MeshStandardMaterial({ color, transparent: true, opacity: 0.6 }));
+    rot.position.set(dx, 0.22, dz); g.add(rot); rotors.push(rot);
+  }
+  g.scale.setScalar(DRONE_SCALE);
+  g.userData = { mat, rotors };
+  return g;
+}
+
+async function build(geom) {
+  // при изменении миссии в полёте сцена строится заново — следы аппаратов переносим
+  const keep = G && G.homes_xy.length === geom.homes_xy.length ? drones.map((d) => ({ n: d.n,
+    arr: d.trail.geometry.attributes.position.array, cur: d.cur, target: d.target, lost: d.lost, lostAt: d.lostAt })) : null;
+  G = geom;
+  if (root) scene.remove(root);
+  root = new THREE.Group(); scene.add(root);
+  ground = null; cells = {}; drones = [];
+  for (const t of tags) t.remove();
+  tags = [];
+  // кадр — по участку, площадкам и добавленным участкам (район миссии шире: запас для изменений)
+  const pts = [...G.area_xy, ...G.homes_xy, ...(G.areas_extra_xy || []).flat()];
+  const xs = pts.map((p) => p[0]), ys = pts.map((p) => p[1]);
+  cx = (Math.min(...xs) + Math.max(...xs)) / 2; cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+  span = Math.max(40, Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys));
+
+  root.add(line([...G.area_xy, G.area_xy[0]].map(([x, y]) => W(x, y, 0.3)), 0xffd166));
+  for (const a of G.areas_extra_xy || []) root.add(line([...a, a[0]].map(([x, y]) => W(x, y, 0.3)), 0xffd166));
+  for (const c of G.cells) {
+    const fill = new THREE.Mesh(flat(new THREE.ShapeGeometry(shapeOf(c.poly_xy)), 0.15),
+      new THREE.MeshBasicMaterial({ transparent: true, opacity: 0.15, depthWrite: false, color: 0x888888 }));
+    const sweep = line(c.wps_xy.map(([x, y]) => W(x, y, 0.25)), 0xffffff, 0.25);
+    const edge = line([...c.poly_xy, c.poly_xy[0]].map(([x, y]) => W(x, y, 0.2)), 0xffffff, 0.35);
+    root.add(fill, sweep, edge);
+    cells[c.id] = { fill, sweep, edge, owner: null, changed: -1, cancelled: c.cancelled };
+  }
+  for (const z of G.nofly_xy) {
+    const geo = new THREE.ExtrudeGeometry(shapeOf(z), { depth: 40, bevelEnabled: false });
+    geo.rotateX(-Math.PI / 2);
+    root.add(new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ color: css("--nofly"), transparent: true, opacity: 0.25, depthWrite: false })));
+    root.add(new THREE.LineSegments(new THREE.EdgesGeometry(geo), new THREE.LineBasicMaterial({ color: css("--nofly") })));
+  }
+  G.homes_xy.forEach(([hx, hy], i) => {
+    const color = COLORS[i % 10];
+    const pad = new THREE.Mesh(flat(new THREE.RingGeometry(1.8, 2.8, 32), 0.3),
+      new THREE.MeshBasicMaterial({ color, side: THREE.DoubleSide }));
+    pad.position.add(W(hx, hy));
+    const drone = makeDrone(color);
+    drone.position.copy(W(hx, hy, 0.6));
+    const trailGeo = new THREE.BufferGeometry();
+    trailGeo.setAttribute("position", new THREE.BufferAttribute(new Float32Array(3 * 20000), 3));
+    trailGeo.setDrawRange(0, 0);
+    const trail = new THREE.Line(trailGeo, new THREE.LineBasicMaterial({ color }));
+    trail.frustumCulled = false;
+    const stem = line([new THREE.Vector3(), new THREE.Vector3(0, -1, 0)], color, 0.7);
+    const shadow = new THREE.Mesh(flat(new THREE.CircleGeometry(2.2, 24), 0.32),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.4, depthWrite: false }));
+    root.add(pad, drone, trail, stem, shadow);
+    const tag = document.createElement("div");
+    tag.className = "tag"; document.body.append(tag); tags.push(tag);
+    drones.push({ i, color, drone, trail, stem, shadow, n: 0, target: { x: hx, y: hy, z: 0 }, cur: { x: hx, y: hy, z: 0 },
+      lost: false, lostAt: 0, mode: "", alt: G.altitudes[i] });
+  });
+  if (keep) keep.forEach((k, i) => {
+    const d = drones[i];
+    d.trail.geometry.attributes.position.array.set(k.arr.subarray(0, k.n * 3));
+    d.n = k.n; d.trail.geometry.setDrawRange(0, k.n); d.trail.geometry.attributes.position.needsUpdate = true;
+    Object.assign(d, { cur: k.cur, target: k.target, lost: k.lost, lostAt: k.lostAt });
+  });
+  $("legend").innerHTML = G.altitudes.map((a, i) => `<div data-i="${i}"><b style="background:${COLORS[i % 10]}"></b>аппарат ${i} · ${a} м<span class="mode"></span></div>`).join("")
+    + (G.nofly_xy.length ? `<div><b style="background:var(--nofly)"></b>бесполётная зона</div>` : "")
+    + `<div><b style="background:#ffd166"></b>участок облёта</div>`;
+  $("legend").hidden = false;
+  $("wait").hidden = true;
+  setCamera(camKind);
+  await setGround();
+}
+
+function setCamera(kind) {
+  camKind = kind;
+  $("cam3d").setAttribute("aria-pressed", String(kind === "3d"));
+  $("camTop").setAttribute("aria-pressed", String(kind === "top"));
+  const vHalf = THREE.MathUtils.degToRad(camera.fov / 2), hHalf = Math.atan(Math.tan(vHalf) * camera.aspect);
+  const dist = (span * 0.6) / Math.sin(Math.min(vHalf, hHalf));
+  controls.target.set(0, 8, 0);
+  const dir = kind === "top" ? new THREE.Vector3(0, 1, 0.001) : new THREE.Vector3(-0.4, 0.55, 0.72);
+  camera.position.copy(dir.normalize().multiplyScalar(dist)).add(controls.target);
+  controls.update();
+}
+
+// ------------------------------------------------------------------ живые данные
+let snap = null, geomVersion = -1;
+function onSnapshot(s) {
+  snap = s;
+  if (s.version !== geomVersion && s.version > 0) {
+    geomVersion = s.version;
+    fetch("/api/state").then((r) => r.json()).then((st) => st.geometry && build(st.geometry));
+  }
+  const names = { idle: "ожидание", running: "миссия идёт", finished: "завершена", stopped: "остановлена" };
+  $("state").textContent = names[s.state] || s.state;
+  $("state").className = `state ${s.state}`;
+  $("clock").textContent = fmtT(s.t || 0);
+  $("planv").textContent = s.plan_version ? `план v${s.plan_version}` : "";
+  for (const e of s.feed || []) {
+    if (e.kind === "done") continue;
+    $("feed").insertAdjacentHTML("beforeend", `<li class="k-${e.kind}"><time>${fmtT(e.t)}</time><span></span></li>`);
+    $("feed").lastElementChild.lastElementChild.textContent = e.text;
+    while ($("feed").children.length > 6) $("feed").firstElementChild.remove();
+    $("feed").hidden = false;
+  }
+  if (!G || !s.agents) return;
+  const done = new Set(s.done || []), cancelled = new Set(s.cancelled || []);
+  const n = s.n_tasks || G.cells.length - cancelled.size;
+  $("done").textContent = `${done.size}/${n}`;
+  $("progress").style.width = `${(100 * done.size) / n}%`;
+  const now = performance.now() / 1000;
+  for (const [id, c] of Object.entries(cells)) {
+    if (cancelled.has(id) || c.cancelled) {  // отменена новой бесполётной зоной
+      c.fill.material.color.set("#3a3a3a"); c.fill.material.opacity = 0.5; c.sweep.visible = false;
+      continue;
+    }
+    const o = s.owner?.[id];
+    if (o !== c.owner) { if (c.owner != null) c.changed = now; c.owner = o; }
+    const col = o == null ? "#888888" : COLORS[o % 10];
+    c.fill.material.color.set(col);
+    c.fill.material.opacity = done.has(id) ? 0.55 : 0.18;
+    c.sweep.material.color.set(done.has(id) ? "#ffffff" : col);
+    c.sweep.material.opacity = done.has(id) ? 0.6 : 0.35;
+  }
+  for (const a of s.agents) {
+    const d = drones[a.id];
+    if (!d || a.x == null) continue;
+    if (a.lost && !d.lost) { d.lost = true; d.lostAt = now; }
+    d.lost = a.lost;
+    if (!a.lost) d.target = { x: a.x, y: a.y, z: a.alt };
+    d.mode = a.paused && !a.lost ? "ПАУЗА" : a.mode;
+    d.leader = a.leader === a.id;
+    const row = $("legend").querySelector(`[data-i="${a.id}"] .mode`);
+    if (row) row.textContent = `${d.mode}${d.leader ? " ★" : ""}`;
+  }
+}
+
+function connect() {
+  const es = new EventSource("/api/stream?feed=0");
+  es.onmessage = (ev) => onSnapshot(JSON.parse(ev.data));
+  es.onerror = () => { es.close(); setTimeout(connect, 1500); };
+}
+
+// ------------------------------------------------------------------ кадр
+const tmp = new THREE.Vector3();
+let lastFrame = 0;
+function tick(t) {
+  const now = t / 1000, dt = Math.min(Math.max(now - lastFrame, 0), 1);
+  lastFrame = now;
+  // плавно догоняем последнюю позицию из телеметрии (данные приходят 4 раза в секунду);
+  // сглаживание по времени, а не по кадрам — при редких кадрах аппарат не отстаёт
+  const k = 1 - Math.exp(-dt * 8);
+  for (const d of drones) {
+    d.cur.x += (d.target.x - d.cur.x) * k; d.cur.y += (d.target.y - d.cur.y) * k;
+    let z = d.cur.z + (d.target.z - d.cur.z) * k;
+    if (d.lost) { const f = Math.min((now - d.lostAt) / 2.5, 1); z = d.target.z * (1 - f * f); }
+    d.cur.z = z;
+    d.drone.position.copy(W(d.cur.x, d.cur.y, z + 0.8));
+    d.drone.rotation.set(d.lost ? 0.5 : 0, 0, d.lost ? 0.35 : 0);
+    d.drone.userData.mat.color.set(d.lost ? "#6b6f6c" : d.color);
+    d.drone.userData.mat.emissiveIntensity = d.lost ? 0 : 0.25;
+    if (!reduced && !d.lost && z > 0.5) for (const r of d.drone.userData.rotors) r.rotation.y += 0.9;
+    d.stem.geometry.setFromPoints([W(d.cur.x, d.cur.y, z), W(d.cur.x, d.cur.y, 0.3)]);
+    d.shadow.position.copy(W(d.cur.x, d.cur.y)).setY(0);
+    d.shadow.visible = z > 0.5;
+    if (z > 0.5 && !d.lost) {  // след: точка не чаще чем через 1 м пути
+      const arr = d.trail.geometry.attributes.position.array, p = W(d.cur.x, d.cur.y, z);
+      const i = d.n - 1;
+      if (d.n === 0 || Math.hypot(arr[i * 3] - p.x, arr[i * 3 + 1] - p.y, arr[i * 3 + 2] - p.z) > 1) {
+        if (d.n < 20000) { arr[d.n * 3] = p.x; arr[d.n * 3 + 1] = p.y; arr[d.n * 3 + 2] = p.z; d.n++; }
+        d.trail.geometry.setDrawRange(0, d.n);
+        d.trail.geometry.attributes.position.needsUpdate = true;
+      }
+    }
+    tmp.copy(d.drone.position).add(new THREE.Vector3(0, 5, 0)).project(camera);
+    const tag = tags[d.i];
+    tag.hidden = tmp.z > 1;
+    if (!tag.hidden) {
+      tag.style.left = `${((tmp.x + 1) / 2) * innerWidth}px`;
+      tag.style.top = `${((1 - tmp.y) / 2) * innerHeight}px`;
+      tag.textContent = d.lost ? `#${d.i} отказ` : `#${d.i} · ${Math.round(z)} м · ${d.mode || ""}${d.leader ? " ★" : ""}`;
+      tag.classList.toggle("dead", d.lost);
+    }
+  }
+  for (const c of Object.values(cells)) {  // ячейки, сменившие владельца, мигают несколько секунд
+    const recent = c.changed > 0 && now - c.changed < 6;
+    c.edge.material.color.set(recent ? css("--accent") : "#ffffff");
+    c.edge.material.opacity = recent ? 0.6 + 0.4 * Math.sin(now * 8) : 0.35;
+  }
+  if (follow && drones.length && snap?.agents) {
+    const lead = snap.agents.find((a) => a.leader === a.id && !a.lost);
+    const d = lead && drones[lead.id];
+    if (d) { const p = d.drone.position; controls.target.lerp(p, 0.05); }
+  }
+  controls.update();
+  renderer.render(scene, camera);
+  requestAnimationFrame(tick);
+}
+
+function resize() {
+  renderer.setSize(innerWidth, innerHeight, false);
+  camera.aspect = innerWidth / Math.max(innerHeight, 1);
+  camera.updateProjectionMatrix();
+}
+addEventListener("resize", resize);
+$("cam3d").onclick = () => setCamera("3d");
+$("camTop").onclick = () => setCamera("top");
+$("camFollow").onclick = () => { follow = !follow; $("camFollow").setAttribute("aria-pressed", String(follow)); };
+$("layer").onclick = () => {
+  layer = layer === "sat" ? "osm" : "sat";
+  $("layer").textContent = layer === "sat" ? "Схема" : "Спутник";
+  setGround();
+};
+resize();
+connect();
+requestAnimationFrame(tick);
+</script>
+</body>
+</html>

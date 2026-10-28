@@ -106,7 +106,7 @@ class PlanValidator:
             paths[aid] = path
             line = LineString(path) if len(path) >= 2 else None
             if line is not None:
-                self._check_geozones(aid, line, world, out)
+                self._check_geozones(aid, path, world, out)
                 self._check_domain(aid, line, world, out)
                 self._check_energy(aid, line.length, v.speed, v.energy_used_wh, out)
 
@@ -133,11 +133,19 @@ class PlanValidator:
         if missing:
             out.append(Violation("assignment", (), f"без исполнителя: {', '.join(missing)}"))
 
-    def _check_geozones(self, aid: int, line: LineString, world: "World", out: list) -> None:
+    def _check_geozones(self, aid: int, path: Sequence[Point2D], world: "World", out: list) -> None:
         for k, zone in enumerate(world.nofly):
             # проход по границе зоны (галсы обрезаны по ней, обход по углам рамки) — не нарушение
             inside = Polygon(zone).buffer(-0.01)
-            inter = line.intersection(inside)
+            # аппарат уже внутри зоны (её объявили в полёте): выход из неё — не нарушение,
+            # проверяем путь после первой точки вне зоны
+            i = 0
+            while i < len(path) and inside.contains(Point(path[i])):
+                i += 1
+            rest = path[i:]
+            if len(rest) < 2:
+                continue
+            inter = LineString(rest).intersection(inside)
             if not inter.is_empty and inter.length > 1e-6:
                 out.append(Violation("geozone", (aid,), f"путь проходит через бесполётную зону #{k}", _point_of(inter)))
 
