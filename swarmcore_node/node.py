@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import csv
 import math
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Optional
@@ -28,6 +29,7 @@ import numpy as np
 
 from swarmcore_node.link import PeerLink
 from swarmcore_node.messages import GCS_ID, Msg, PlanPayload
+from swarmcore_node.mission_update import apply_update
 from swarmcore_node.modes import Mode, ModeInputs, ModeMachine
 from swarmcore_node.vehicle import make_commands
 from swarmsim.agents.base import Agent, MotionSource
@@ -38,6 +40,10 @@ from swarmsim.planning.validator import PlanValidator
 from swarmsim.registry import make_allocator
 from swarmsim.scenario import Scenario
 from swarmsim.world import World
+
+# события, которые узел пересылает станции в heartbeat (живая лента на пульте)
+FEED_TYPES = {"mission_start", "plan_published", "plan_rejected", "peer_lost", "peer_back", "takeoff", "landed",
+              "rtl", "mode", "vehicle_error", "task_done", "self_failure", "paused", "resumed", "mission_updated"}
 
 
 @dataclass
@@ -110,6 +116,11 @@ class SwarmNode:
         self.vehicle = make_commands(self.cfg.vehicle_commands, f"vehicle-{node_id}")
         self._phase_t = 0.0
         self.finished = False
+        self.paused = False
+        self.mission_rev = 0  # последняя применённая ревизия миссии
+        self._mission_changed: Optional[str] = None
+        self._seen_cmds: set[str] = set()
+        self._feed: deque = deque(maxlen=12)
         self.energy_used_wh = 0.0
         self.gcs_seen = -math.inf
         self._last_hb = -math.inf
@@ -180,7 +191,15 @@ class SwarmNode:
             return
         if m.kind == "gcs_hb":
             self.gcs_seen = self.t
+            for c in m.payload.get("cmds", []):  # каждая команда исполняется один раз, хотя приходит повторно
+                if c["id"] not in self._seen_cmds:
+                    self._seen_cmds.add(c["id"])
+                    self._on_command(c["cmd"])
             self._on_command(m.payload.get("cmd"))
+            if self.mission is not None and m.payload.get("mission_id") == self.mission_id:
+                for u in sorted(m.payload.get("updates", []), key=lambda u: u["rev"]):
+                    if u["rev"] == self.mission_rev + 1:
+                        self._apply_update(u)
             if m.mission_id and m.mission_id != self.mission_id and "scenario" in m.payload:
                 self._on_mission(m)
             return
@@ -219,13 +238,49 @@ class SwarmNode:
                                                 "agents": sc.agents.count, "altitude": self.altitude})
         self._root = ev.seq
 
+    def _apply_update(self, upd: dict[str, Any]) -> None:
+        """Ревизия миссии от станции: новые зоны и участки (одинаково на всех бортах)."""
+        res = apply_update(self.world, self.tasks, self.mission.mission, upd)
+        self.mission_rev = int(upd["rev"])
+        a = self.agent
+        if upd.get("nofly") and a is not None:
+            # маршрут к текущей задаче мог идти через новую зону — строим заново (с непройденной точки)
+            cur = a.current
+            if cur is not None:
+                a._abandon_current(self.tasks)
+                if not self.tasks[cur].is_finished:
+                    a.queue.insert(0, cur)
+            if a.status == "returning":
+                a._go_home(self.world)
+        ev = self._event("mission_updated", data={"rev": self.mission_rev, **{k: len(v) for k, v in res.items()}})
+        self._root = ev.seq
+        self._mission_changed = f"миссия изменена (ревизия {self.mission_rev})"
+
     def _on_command(self, cmd: Optional[str]) -> None:
         if not cmd:
             return
-        if cmd == "rtl" and self.rtl_reason is None and self.mission is not None:
+        name, _, arg = cmd.partition(":")
+        mine = arg == "" or (arg.lstrip("-").isdigit() and int(arg) == self.id)
+        if not mine:
+            return
+        if name == "rtl" and self.rtl_reason is None and self.mission is not None:
             self._start_rtl("команда оператора")
-        elif cmd.startswith("fail:") and int(cmd.split(":")[1]) == self.id:
+        elif name == "fail":
             self.crash()
+        elif name == "pause" and not self.paused and self.mission is not None:
+            self.paused = True
+            self.motion.hold()
+            self._event("paused", data={"reason": "команда оператора"})
+        elif name == "resume" and self.paused:
+            self.paused = False
+            a = self.agent
+            if a is not None and a._route:  # продолжаем с той точки маршрута, где остановились
+                a._set_route(a._route[a._route_done:])
+            self._event("resumed", data={})
+        elif name == "drain" and self.mission is not None:
+            # имитация разряда: остаётся 20 % ёмкости (идемпотентно — повтор команды ничего не меняет)
+            self.energy_used_wh = max(self.energy_used_wh, 0.8 * self.cfg.battery_wh)
+            self._event("battery_drain", data={"energy_used_wh": round(self.energy_used_wh, 1)})
 
     def _on_heartbeat(self, m: Msg) -> None:
         p = self.peers.get(m.src)
@@ -241,7 +296,8 @@ class SwarmNode:
             self.dead.discard(m.src)
             ev = self._event("peer_back", data={"agent": m.src})
             self._root = ev.seq
-        self._merge_progress(m.src, pl.get("done", []), pl.get("progress", {}))
+        same_rev = pl.get("rev", 0) == self.mission_rev  # прогресс по старым галсам не переносим
+        self._merge_progress(m.src, pl.get("done", []), pl.get("progress", {}) if same_rev else {})
         # лидер досылает план тем, у кого он устарел (сообщение plan могло потеряться)
         if self.plan and self.plan.leader == self.id and p.plan_version < self.plan.version:
             self._send("plan", self.plan.to_dict())
@@ -287,6 +343,8 @@ class SwarmNode:
         return SwarmSnapshot(t=self.t, agents=views, world=self.world, gcs_reachable=self._gcs_ok())
 
     def _replan_cause(self, members: list[int]) -> Optional[str]:
+        if self._mission_changed and self.plan is not None:
+            return self._mission_changed
         if self.plan is None:
             waiting = [j for j, p in self.peers.items() if j not in self.dead and p.pos is None]
             return None if waiting else "start"
@@ -326,6 +384,7 @@ class SwarmNode:
                             data={"cause": cause, "violations": [str(v) for v in report.violations]})
             return
         self._last_rejected = ""
+        self._mission_changed = None
         plan = PlanPayload(version=self.max_version + 1, leader=self.id, members=members,
                            excluded=sorted(self.dead), plans=plans, reasons=dict(asg.reasons), cause=cause)
         old = self.plan
@@ -415,7 +474,10 @@ class SwarmNode:
             self._takeoff()
         if self.phase in ("takeoff", "air", "landing"):
             self.energy_used_wh += self.cfg.power_w * dt / 3600.0
-        if self.phase == "air":
+        if self.phase == "air" and self.paused:
+            self.motion.step(dt)  # висим на месте, батарея расходуется
+            self._check_battery()
+        elif self.phase == "air":
             a.step(dt, self.tasks, self.world)
             self._check_battery()
             if a.current is None and not a.queue and a.status in ("home", "idle") and \
@@ -464,16 +526,21 @@ class SwarmNode:
                 "current": a.current, "queue": list(a.queue), "flying": self.flying, "phase": self.phase,
                 "status": a.status if self.phase == "air" else self.phase,
                 "progress": {a.current: self.tasks[a.current].progress} if a.current else {},
-                "done": sorted(t.id for t in self.tasks if t.is_finished),
+                "done": sorted(t.id for t in self.tasks if t.status.value == "done"),
+                "cancelled": sorted(t.id for t in self.tasks if t.status.value == "failed"), "rev": self.mission_rev,
                 "n_tasks": len(self.tasks), "energy_used_wh": round(self.energy_used_wh, 3),
                 "plan_version": self.plan.version if self.plan else 0,
                 "dead": sorted(self.dead), "issue": self.plan_issue or self.rtl_reason or "",
+                "paused": self.paused, "battery_wh": self.cfg.battery_wh, "ev": list(self._feed),
             })
         self._send("hb", payload)
 
     def _event(self, type: str, cause: Optional[int] = None, data: Optional[dict] = None):
-        return self.log.append(type=type, t=round(self.t or 0.0, 3), source=f"node:{self.id}", cause=cause,
-                               data=data or {})
+        ev = self.log.append(type=type, t=round(self.t or 0.0, 3), source=f"node:{self.id}", cause=cause,
+                             data=data or {})
+        if type in FEED_TYPES:
+            self._feed.append({"seq": ev.seq, "t": ev.t, "type": type, "data": ev.data})
+        return ev
 
     def _record_trace(self) -> None:
         st = self.motion.state()

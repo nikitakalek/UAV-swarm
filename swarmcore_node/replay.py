@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 from swarmcore_node.demo import _load, analyze
+from swarmcore_node.mission_update import apply_update
 from swarmsim.missions import decompose
 from swarmsim.scenario import Scenario
 from swarmsim.world import World
@@ -33,6 +34,8 @@ def export(run_dir: str | Path) -> dict[str, Any]:
     sc = Scenario.model_validate(meta["scenario"])
     world = World.from_config(sc.world, np.random.default_rng(0))
     tasks = decompose(sc.mission, world)
+    for upd in meta.get("updates", []):  # изменения миссии в полёте
+        apply_update(world, tasks, sc.mission, upd)
     n = sc.agents.count
 
     # --- треки аппаратов (по heartbeat, которые видела станция)

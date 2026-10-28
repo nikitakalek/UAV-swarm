@@ -5,6 +5,7 @@ from __future__ import annotations
 from m1_helpers import make_world_tasks, snapshot
 from swarmsim.alloc import SectorAllocator
 from swarmsim.interfaces import Assignment
+from swarmsim.missions.base import TaskSet
 from swarmsim.planning.validator import PlanValidator, planned_path
 
 CORNERS = {0: (0, 0), 1: (1000, 0), 2: (0, 1000), 3: (1000, 1000)}
@@ -85,3 +86,19 @@ def test_zone_inside_task_is_reported():
     asg = Assignment(plans={0: [t.id for t in tasks]})
     rep = PlanValidator().validate(asg, snapshot(world, {0: (0, 0)}), tasks)
     assert rep.by_rule().get("geozone", 0) >= 1
+
+
+def test_exit_from_zone_declared_in_flight_is_allowed():
+    """Аппарат внутри зоны, объявленной в полёте: выход разрешён, повторный заход — нарушение."""
+    world, tasks = make_world_tasks(n_cells=4)
+    world.nofly.append(ZONE)
+    from swarmsim.interfaces import Assignment as A
+    v = PlanValidator()
+    inside = snapshot(world, {0: (500, 500)}, homes={0: (0, 0)})
+    assert "geozone" not in v.validate(A(plans={0: []}), inside, TaskSet(), None).by_rule()
+    # путь из зоны домой, а потом снова через неё на другую сторону
+    v.domain_margin = 1e9
+    across = snapshot(world, {0: (500, 500)}, homes={0: (1000, 500)})
+    world.nofly_margin = 0.0
+    rep = v.validate(A(plans={0: []}), across, TaskSet(), None)
+    assert "geozone" not in rep.by_rule(), "прямой выход к дому через край зоны — это всё ещё выход"

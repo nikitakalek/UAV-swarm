@@ -1,0 +1,542 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Пульт SwarmCore</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.css">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.css">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Barlow+Semi+Condensed:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Пульт: карта слева, панель миссии/полёта справа. Те же токены, что у 3D-вида. */
+:root {
+  --bg: #eef1ec; --panel: #f8faf6; --panel-2: #e7ece4; --line: #cfd6cb; --fg: #1d2620; --muted: #5d6b61;
+  --accent: #c2621a; --on-accent: #fffaf4;
+  --ok: #2e7d4f; --warn: #b7791f; --bad: #c0392b; --info: #2b6cb0; --nofly: #c0392b;
+  --font-ui: "Barlow Semi Condensed", "Arial Narrow", "Helvetica Neue", Arial, sans-serif;
+  --font-num: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1613; --panel: #151e1a; --panel-2: #1b2621; --line: #26332d; --fg: #e3ebe5; --muted: #8fa198;
+    --accent: #e8913f; --on-accent: #1a120a; --ok: #4fbf7e; --warn: #e0a53f; --bad: #ee6a5a; --info: #6aa8ea;
+    --nofly: #e05a4b; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1613; --panel: #151e1a; --panel-2: #1b2621; --line: #26332d; --fg: #e3ebe5; --muted: #8fa198;
+  --accent: #e8913f; --on-accent: #1a120a; --ok: #4fbf7e; --warn: #e0a53f; --bad: #ee6a5a; --info: #6aa8ea;
+  --nofly: #e05a4b; color-scheme: dark;
+}
+*, *::before, *::after { box-sizing: border-box; }
+[hidden] { display: none !important; }
+html, body { height: 100%; margin: 0; }
+body { background: var(--bg); color: var(--fg); font-family: var(--font-ui); font-size: 15px;
+  display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 10px;
+  padding-left: max(14px, env(safe-area-inset-left, 0px)); padding-right: max(14px, env(safe-area-inset-right, 0px));
+  padding-block: 10px; }
+button, select, input { font: inherit; color: inherit; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+
+header { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 16px; }
+h1 { margin: 0; font-size: 22px; font-weight: 700; }
+.state { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; padding: 3px 10px;
+  border-radius: 999px; border: 1px solid currentColor; }
+.st-idle { color: var(--muted); } .st-running { color: var(--ok); } .st-finished { color: var(--info); }
+.st-stopped { color: var(--warn); }
+header .clock { font-family: var(--font-num); font-size: 13px; color: var(--muted); font-variant-numeric: tabular-nums; }
+header .spacer { flex: 1; }
+.btn { background: var(--panel); border: 1px solid var(--line); border-radius: 5px; padding: 6px 12px; cursor: pointer;
+  font-size: 14px; white-space: nowrap; }
+.btn:hover:not(:disabled) { border-color: var(--accent); }
+.btn:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--on-accent); font-weight: 600; }
+.btn.danger { color: var(--bad); border-color: color-mix(in srgb, var(--bad) 50%, var(--line)); }
+.btn.on { border-color: var(--accent); color: var(--accent); }
+.btn.sm { padding: 2px 8px; font-size: 12px; }
+
+main { display: grid; grid-template-columns: minmax(0, 1fr) 390px; gap: 10px; min-height: 0; }
+#map { border: 1px solid var(--line); border-radius: 6px; min-height: 0; }
+.hint { position: absolute; z-index: 500; left: 50%; top: 10px; transform: translateX(-50%); background: var(--panel);
+  border: 1px solid var(--accent); color: var(--fg); padding: 5px 12px; border-radius: 5px; font-size: 14px;
+  pointer-events: none; max-width: calc(100% - 24px); text-align: center; }
+.mapwrap { position: relative; min-height: 0; display: grid; }
+
+aside { min-height: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 10px; }
+section.card { background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 10px 12px;
+  display: flex; flex-direction: column; gap: 8px; }
+section.card h2 { margin: 0; font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase;
+  color: var(--muted); display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.tools { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.tool-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; font-size: 14px; }
+.tool-row .val { font-family: var(--font-num); font-size: 12px; color: var(--muted); }
+.params { display: grid; grid-template-columns: 1fr 92px; gap: 6px 10px; align-items: center; font-size: 14px; }
+.params input, .params select { width: 100%; background: var(--bg); border: 1px solid var(--line); border-radius: 4px;
+  padding: 3px 6px; font-family: var(--font-num); font-size: 13px; }
+.params small { grid-column: 1 / -1; color: var(--muted); margin-top: -4px; font-size: 12px; }
+.actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.actions .btn { flex: 1; }
+.summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; }
+.kpi { background: var(--panel-2); border-radius: 4px; padding: 6px 8px; }
+.kpi b { display: block; font-family: var(--font-num); font-size: 16px; font-variant-numeric: tabular-nums; }
+.kpi span { font-size: 12px; color: var(--muted); }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th { text-align: left; font-weight: 500; color: var(--muted); font-size: 12px; padding: 2px 4px; }
+td { padding: 4px; border-top: 1px solid var(--line); vertical-align: middle; }
+td.num { font-family: var(--font-num); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.sw { display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; }
+.viol { color: var(--bad); font-size: 13px; margin: 0; padding-left: 18px; }
+.okline { color: var(--ok); font-size: 14px; }
+.err { color: var(--bad); font-size: 14px; }
+.pill { font-size: 11px; font-weight: 600; letter-spacing: 0.05em; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid currentColor; white-space: nowrap; }
+.m-NORMAL { color: var(--ok); } .m-DEGRADED { color: var(--warn); } .m-NO_GCS, .m-RTL { color: var(--info); }
+.m-DONE, .m-IDLE { color: var(--muted); } .m-ОТКАЗ { color: var(--bad); }
+.bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; }
+.bar i { display: block; height: 100%; background: var(--ok); width: 0; transition: width 0.4s; }
+.bat { display: inline-block; width: 34px; height: 8px; border: 1px solid var(--line); border-radius: 2px;
+  vertical-align: middle; margin-right: 4px; overflow: hidden; }
+.bat i { display: block; height: 100%; background: var(--ok); }
+.agent-actions { display: flex; gap: 3px; }
+.cmds { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.feed { list-style: none; margin: 0; padding: 0; max-height: 300px; overflow-y: auto; font-size: 13px; }
+.feed li { display: grid; grid-template-columns: 48px 1fr; gap: 6px; padding: 3px 0 3px 6px;
+  border-left: 3px solid transparent; }
+.feed time { font-family: var(--font-num); font-size: 12px; color: var(--muted); }
+.feed .k-fail { border-left-color: var(--bad); } .feed .k-plan { border-left-color: var(--accent); }
+.feed .k-warn { border-left-color: var(--warn); } .feed .k-cmd { border-left-color: var(--info); }
+.feed .k-done { color: var(--muted); }
+.droneicon { font-family: var(--font-num); font-size: 11px; font-weight: 600; color: #fff; border-radius: 50%;
+  width: 22px !important; height: 22px !important; display: grid; place-items: center; border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.4); }
+.homeicon { font-family: var(--font-num); font-size: 11px; font-weight: 700; color: #fff; border-radius: 4px;
+  width: 20px !important; height: 20px !important; display: grid; place-items: center; border: 2px solid #fff;
+  box-shadow: 0 0 0 1px rgba(0,0,0,0.5); }
+.leaflet-container { font-family: var(--font-ui); background: var(--panel-2); }
+@media (max-width: 860px) {
+  html, body { height: auto; }
+  body { display: flex; flex-direction: column; }
+  main { grid-template-columns: minmax(0, 1fr); }
+  #map, .mapwrap { height: 60vh; min-height: 320px; }
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Пульт SwarmCore</h1>
+  <span class="state st-idle" id="state">Подготовка</span>
+  <span class="clock" id="clock"></span>
+  <span class="spacer"></span>
+  <button class="btn" id="open3d" title="Открыть 3D-вид в отдельном окне — перетащите его на второй монитор">3D-вид ↗</button>
+</header>
+
+<main>
+  <div class="mapwrap"><div id="map" aria-label="Карта"></div><div class="hint" id="hint" hidden></div></div>
+  <aside>
+    <!-- ======================= подготовка миссии ======================= -->
+    <div id="prep">
+      <section class="card">
+        <h2>Разметка <button class="btn sm" id="sample" title="Поставить пример участка, зоны и площадок">Пример</button></h2>
+        <div class="tool-row"><span>Участок облёта</span><span class="val" id="vArea">не задан</span></div>
+        <div class="tool-row"><span>Бесполётные зоны</span><span class="val" id="vNofly">0</span></div>
+        <div class="tool-row"><span>Площадки старта (аппараты)</span><span class="val" id="vHomes">0</span></div>
+        <div class="tools">
+          <button class="btn" id="tArea">Нарисовать участок</button>
+          <button class="btn" id="tNofly">Добавить зону</button>
+          <button class="btn" id="tHomes">Ставить площадки</button>
+          <button class="btn danger" id="tClear">Очистить всё</button>
+        </div>
+      </section>
+      <section class="card">
+        <h2>Параметры</h2>
+        <div class="params">
+          <label for="pAlt">Высота первого эшелона, м</label><input id="pAlt" type="number" min="5" max="120" step="1" value="15">
+          <label for="pStep">Шаг эшелонов, м</label><input id="pStep" type="number" min="3" max="20" step="1" value="4">
+          <label for="pSpeed">Скорость, м/с</label><input id="pSpeed" type="number" min="1" max="20" step="0.5" value="5">
+          <label for="pSwath">Ширина полосы, м</label><input id="pSwath" type="number" min="5" max="100" step="1" value="20">
+          <small>Шаг галсов «змейки»: ширина захвата камеры или штанги опрыскивателя</small>
+          <label for="pCell">Размер ячейки, м</label><input id="pCell" type="number" min="20" max="500" step="5" value="50">
+          <label for="pBat">Батарея, Вт·ч</label><input id="pBat" type="number" min="20" max="5000" step="10" value="200">
+          <label for="pScale">Ускорение симуляции</label>
+          <select id="pScale"><option value="1">1×</option><option value="2">2×</option><option value="5" selected>5×</option><option value="10">10×</option></select>
+        </div>
+      </section>
+      <section class="card">
+        <h2>План</h2>
+        <div class="actions">
+          <button class="btn" id="bPreview">Проверить план</button>
+          <button class="btn primary" id="bLaunch" disabled title="Сначала проверьте план">Запуск миссии</button>
+        </div>
+        <div id="prevOut"></div>
+      </section>
+    </div>
+
+    <!-- ======================= полёт ======================= -->
+    <div id="flight" hidden>
+      <section class="card">
+        <h2>Ход миссии <span id="planv"></span></h2>
+        <div class="bar"><i id="progress"></i></div>
+        <div class="summary">
+          <div class="kpi"><b id="kDone">0/0</b><span>ячеек выполнено</span></div>
+          <div class="kpi"><b id="kAir">0</b><span>в воздухе</span></div>
+          <div class="kpi"><b id="kLink">есть</b><span>связь пульта</span></div>
+        </div>
+      </section>
+      <section class="card">
+        <h2>Борты</h2>
+        <table>
+          <thead><tr><th>№</th><th>режим</th><th>высота</th><th>заряд</th><th>задача</th><th></th></tr></thead>
+          <tbody id="agents"></tbody>
+        </table>
+      </section>
+      <section class="card">
+        <h2>Команды группе</h2>
+        <div class="cmds">
+          <button class="btn" id="cPause">Пауза</button>
+          <button class="btn" id="cRtl">Все домой</button>
+          <button class="btn" id="cLink" title="Имитация: пульт перестаёт слать сигналы группе">Отключить связь пульта</button>
+          <button class="btn danger" id="cStop">Остановить миссию</button>
+        </div>
+      </section>
+      <section class="card" id="updCard">
+        <h2>Изменить миссию в полёте</h2>
+        <div class="cmds">
+          <button class="btn" id="uNofly">Новая бесполётная зона</button>
+          <button class="btn" id="uArea">Добавить участок</button>
+        </div>
+        <div class="params"><small>Нарисуйте контур на карте — группа примет изменение и перестроит план, не садясь</small></div>
+      </section>
+      <section class="card" id="doneCard" hidden>
+        <h2>Миссия завершена</h2>
+        <div class="actions">
+          <button class="btn primary" id="bNew">Новая миссия</button>
+          <button class="btn" id="bReplay">Повтор в 3D ↗</button>
+        </div>
+      </section>
+    </div>
+
+    <section class="card">
+      <h2>События</h2>
+      <ol class="feed" id="feed"></ol>
+    </section>
+  </aside>
+</main>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@geoman-io/leaflet-geoman-free@2.17.0/dist/leaflet-geoman.min.js"></script>
+<script>
+const COLORS = ["#2f7fd1", "#e0742d", "#8b5cc7", "#1f9e89", "#d14b7c", "#7a8f1f", "#3b4fc4", "#b0582a", "#178ab0", "#9c3fa8"];
+const $ = (id) => document.getElementById(id);
+const css = (n) => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const fmtT = (s) => `${Math.floor(s / 60)}:${String(Math.round(s % 60)).padStart(2, "0")}`;
+const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
+// ------------------------------------------------------------------ карта
+const map = L.map("map", { zoomControl: true, maxZoom: 19 }).setView([55.3778, 37.7322], 16);
+const osm = L.tileLayer("/tiles/osm/{z}/{x}/{y}", { maxZoom: 19, attribution: "© OpenStreetMap" });
+const sat = L.tileLayer("/tiles/sat/{z}/{x}/{y}", { maxZoom: 19, attribution: "Esri World Imagery" });
+sat.addTo(map);
+L.control.layers({ "Спутник": sat, "Схема": osm }, null, { position: "topright" }).addTo(map);
+L.control.scale({ imperial: false }).addTo(map);
+map.pm.setLang("ru");
+map.pm.setGlobalOptions({ snappable: false, allowSelfIntersection: false });
+
+const draftLayer = L.layerGroup().addTo(map);   // участок, зоны, площадки
+const planLayer = L.layerGroup().addTo(map);    // предпросмотр / живые ячейки
+const liveLayer = L.layerGroup().addTo(map);    // аппараты и следы
+
+let area = null;          // L.Polygon
+let nofly = [];           // [L.Polygon]
+let homes = [];           // [L.Marker]
+let tool = null;
+let previewOk = false;
+
+function ll(layer) { return layer.getLatLngs()[0].map((p) => [p.lat, p.lng]); }
+function homeIcon(i) {
+  return L.divIcon({ className: "", html: `<div class="homeicon" style="background:${COLORS[i % 10]}">${i}</div>`,
+    iconSize: [20, 20], iconAnchor: [10, 10] });
+}
+function styleArea(p) { p.setStyle({ color: "#ffd166", weight: 3, fillOpacity: 0.08, dashArray: null }); }
+function styleNofly(p) { p.setStyle({ color: css("--nofly"), weight: 2, fillColor: css("--nofly"), fillOpacity: 0.3 }); }
+
+function setTool(t, hint) {
+  tool = t;
+  map.pm.disableDraw();
+  for (const [id, name] of [["tArea", "area"], ["tNofly", "nofly"], ["tHomes", "homes"]]) $(id).classList.toggle("on", t === name);
+  $("hint").hidden = !hint;
+  $("hint").textContent = hint || "";
+  for (const [id, name] of [["uNofly", "upd-nofly"], ["uArea", "upd-area"]]) $(id).classList.toggle("on", t === name);
+  const isArea = t === "area" || t === "upd-area";
+  if (t && t !== "homes") map.pm.enableDraw("Polygon", { templineStyle: { color: isArea ? "#ffd166" : css("--nofly") } });
+}
+$("uNofly").onclick = () => setTool(tool === "upd-nofly" ? null : "upd-nofly", "Обведите новую бесполётную зону — группа облетит её");
+$("uArea").onclick = () => setTool(tool === "upd-area" ? null : "upd-area", "Обведите дополнительный участок — группа добавит его в работу");
+$("tArea").onclick = () => setTool(tool === "area" ? null : "area", "Щёлкайте по углам участка, замкните контур на первой точке");
+$("tNofly").onclick = () => setTool(tool === "nofly" ? null : "nofly", "Обведите бесполётную зону, замкните на первой точке");
+$("tHomes").onclick = () => setTool(tool === "homes" ? null : "homes", "Щёлкните по карте, чтобы поставить площадку; повторно — «Ставить площадки», чтобы закончить");
+$("tClear").onclick = () => { clearDraft(); setTool(null); };
+
+map.on("pm:create", (e) => {
+  const poly = e.layer;
+  map.removeLayer(poly);
+  if (tool && tool.startsWith("upd-")) {  // изменение миссии в полёте: отправляем на сервер, рисует геометрия
+    const body = tool === "upd-nofly" ? { nofly: ll(poly) } : { area: ll(poly) };
+    setTool(null);
+    api("/api/mission/update", body).catch((err) => note(err.message));
+    return;
+  }
+  if (tool === "area") { if (area) draftLayer.removeLayer(area); area = poly; styleArea(poly); }
+  else if (tool === "nofly") { nofly.push(poly); styleNofly(poly); poly.on("contextmenu", () => { draftLayer.removeLayer(poly); nofly = nofly.filter((z) => z !== poly); changed(); }); }
+  draftLayer.addLayer(poly);
+  poly.pm.enable({ allowSelfIntersection: false });
+  poly.on("pm:edit", changed);
+  setTool(null);
+  changed();
+});
+map.on("click", (e) => { if (tool === "homes") addHome([e.latlng.lat, e.latlng.lng]); });
+
+function addHome(p) {
+  const m = L.marker(p, { draggable: true, icon: homeIcon(homes.length) }).addTo(draftLayer);
+  m.bindTooltip("Площадка: перетащите, правый щелчок — удалить");
+  m.on("dragend", changed);
+  m.on("contextmenu", () => { draftLayer.removeLayer(m); homes = homes.filter((h) => h !== m); homes.forEach((h, i) => h.setIcon(homeIcon(i))); changed(); });
+  homes.push(m);
+  changed();
+}
+function clearDraft() {
+  draftLayer.clearLayers(); planLayer.clearLayers();
+  area = null; nofly = []; homes = [];
+  changed();
+}
+function draft() {
+  return {
+    area: area ? ll(area) : [], nofly: nofly.map(ll), homes: homes.map((m) => [m.getLatLng().lat, m.getLatLng().lng]),
+    params: { altitude: +$("pAlt").value, altitude_step: +$("pStep").value, speed: +$("pSpeed").value,
+      swath: +$("pSwath").value, cell_size: +$("pCell").value, battery_wh: +$("pBat").value, time_scale: +$("pScale").value },
+  };
+}
+function changed() {
+  previewOk = false;
+  $("bLaunch").disabled = true;
+  planLayer.clearLayers();
+  $("prevOut").innerHTML = "";
+  const d = draft();
+  $("vArea").textContent = area ? `${(L.GeometryUtil?.geodesicArea ? L.GeometryUtil.geodesicArea(area.getLatLngs()[0]) / 1e4 : polyHa(d.area)).toFixed(2)} га` : "не задан";
+  $("vNofly").textContent = String(nofly.length);
+  $("vHomes").textContent = String(homes.length);
+  try { localStorage.setItem("swarmcore-draft", JSON.stringify(d)); } catch (_) {}
+}
+for (const id of ["pAlt", "pStep", "pSpeed", "pSwath", "pCell", "pBat", "pScale"]) $(id).addEventListener("change", changed);
+function polyHa(pts) {  // площадь по сферическому приближению
+  const R = 6378137, k = Math.PI / 180;
+  let s = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [la1, lo1] = pts[i], [la2, lo2] = pts[(i + 1) % pts.length];
+    s += (lo2 - lo1) * k * (2 + Math.sin(la1 * k) + Math.sin(la2 * k));
+  }
+  return Math.abs(s * R * R / 2) / 1e4;
+}
+
+function loadDraft(d) {
+  clearDraft();
+  if (d.area?.length) { area = L.polygon(d.area); styleArea(area); draftLayer.addLayer(area); area.pm.enable(); area.on("pm:edit", changed); }
+  for (const z of d.nofly || []) {
+    const p = L.polygon(z); styleNofly(p); draftLayer.addLayer(p); p.pm.enable(); p.on("pm:edit", changed); nofly.push(p);
+    p.on("contextmenu", () => { draftLayer.removeLayer(p); nofly = nofly.filter((q) => q !== p); changed(); });
+  }
+  for (const h of d.homes || []) addHome(h);
+  const p = d.params || {};
+  for (const [id, k] of [["pAlt", "altitude"], ["pStep", "altitude_step"], ["pSpeed", "speed"], ["pSwath", "swath"],
+    ["pCell", "cell_size"], ["pBat", "battery_wh"], ["pScale", "time_scale"]]) if (p[k] != null) $(id).value = p[k];
+  changed();
+  if (area) map.fitBounds(area.getBounds().pad(0.25));
+}
+function sampleDraft() {  // пример: поле ≈ 200×150 м, зона в середине, три площадки у кромки
+  const lat0 = 55.3768, lon0 = 37.7300, ky = 1 / 111320, kx = 1 / (111320 * Math.cos(lat0 * Math.PI / 180));
+  const P = (x, y) => [lat0 + y * ky, lon0 + x * kx];
+  return {
+    area: [P(20, 20), P(220, 20), P(225, 175), P(15, 165)],
+    nofly: [[P(110, 80), P(140, 80), P(140, 105), P(110, 105)]],
+    homes: [P(0, 0), P(6, 0), P(12, 0)],
+    params: { altitude: 15, altitude_step: 4, speed: 5, swath: 20, cell_size: 50, battery_wh: 200, time_scale: 5 },
+  };
+}
+$("sample").onclick = () => loadDraft(sampleDraft());
+
+// ------------------------------------------------------------------ предпросмотр и запуск
+async function api(path, body) {
+  const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {}) });
+  const j = await r.json();
+  if (!r.ok) throw new Error(j.error || r.statusText);
+  return j;
+}
+$("bPreview").onclick = async () => {
+  $("prevOut").innerHTML = "<div>Считаю план…</div>";
+  planLayer.clearLayers();
+  try {
+    const p = await api("/api/preview", draft());
+    drawPreview(p);
+    previewOk = p.ok;
+    $("bLaunch").disabled = !p.ok;
+    $("bLaunch").title = p.ok ? "Запустить миссию" : "План недопустим — исправьте разметку или параметры";
+  } catch (e) {
+    $("prevOut").innerHTML = `<div class="err">${esc(e.message)}</div>`;
+  }
+};
+function drawPreview(p) {
+  for (const c of p.cells) {
+    const col = c.owner == null ? "#888" : COLORS[c.owner % 10];
+    L.polygon(c.poly, { color: "#fff", weight: 1, fillColor: col, fillOpacity: 0.35, interactive: false }).addTo(planLayer);
+  }
+  for (const a of p.agents) L.polyline(a.path, { color: COLORS[a.id % 10], weight: 2, opacity: 0.9 }).addTo(planLayer);
+  const rows = p.agents.map((a) => `<tr><td><span class="sw" style="background:${COLORS[a.id % 10]}"></span>${a.id}</td>
+    <td class="num">${a.altitude} м</td><td class="num">${a.tasks}</td><td class="num">${(a.length_m / 1000).toFixed(2)} км</td>
+    <td class="num">${fmtT(a.time_s)}</td><td class="num">${a.energy_wh} Вт·ч</td></tr>`).join("");
+  $("prevOut").innerHTML = `
+    <div class="summary">
+      <div class="kpi"><b>${(p.area_m2 / 1e4).toFixed(2)} га</b><span>площадь</span></div>
+      <div class="kpi"><b>${p.n_tasks}</b><span>ячеек</span></div>
+      <div class="kpi"><b>${fmtT(p.time_s)}</b><span>мин:с до конца</span></div>
+    </div>
+    <table><thead><tr><th>№</th><th>эшелон</th><th>ячеек</th><th>путь</th><th>время</th><th>энергия</th></tr></thead><tbody>${rows}</tbody></table>
+    ${p.ok ? '<div class="okline">Валидатор: нарушений нет — план можно запускать</div>'
+      : `<div class="err">Валидатор: план недопустим</div><ul class="viol">${p.violations.map((v) => `<li>${esc(v)}</li>`).join("")}</ul>`}`;
+}
+$("bLaunch").onclick = async () => {
+  if (!previewOk) return;
+  try { setTool(null); await api("/api/launch", draft()); }
+  catch (e) { $("prevOut").insertAdjacentHTML("beforeend", `<div class="err">${esc(e.message)}</div>`); }
+};
+
+// ------------------------------------------------------------------ полёт
+let geom = null, geomVersion = -1, cellLayers = {}, droneMarkers = {}, trails = {}, lastSnap = null, feedN = 0;
+async function loadGeometry() {
+  const s = await (await fetch("/api/state")).json();
+  geom = s.geometry;
+  geomVersion = geom ? geom.version : -1;
+  planLayer.clearLayers(); liveLayer.clearLayers();
+  cellLayers = {}; droneMarkers = {}; trails = {};
+  if (!geom) return;
+  loadDraft({ area: geom.area, nofly: geom.nofly, homes: geom.homes, params: geom.params });  // чистит planLayer
+  for (const c of geom.cells) cellLayers[c.id] = L.polygon(c.poly, { color: "#fff", weight: 1, fillOpacity: 0.15, interactive: false }).addTo(planLayer);
+  for (const a of geom.areas_extra || []) L.polygon(a, { color: "#ffd166", weight: 3, dashArray: "6 4", fill: false, interactive: false }).addTo(planLayer);
+  if (lastSnap && lastSnap.state !== "idle") showPrep(false);
+}
+function cmd(c) { api("/api/command", { cmd: c }).catch((e) => note(e.message)); }
+function note(text) { $("feed").insertAdjacentHTML("beforeend", `<li class="k-warn"><time>—</time><span>${esc(text)}</span></li>`); }
+
+$("cPause").onclick = () => cmd(lastSnap?.agents?.some((a) => a.paused) ? "resume" : "pause");
+$("cRtl").onclick = () => cmd("rtl");
+$("cLink").onclick = () => cmd(lastSnap?.gcs_link === false ? "gcs_link:on" : "gcs_link:off");
+$("cStop").onclick = () => api("/api/stop").catch((e) => note(e.message));
+$("bNew").onclick = () => { $("doneCard").hidden = true; showPrep(true); liveLayer.clearLayers(); planLayer.clearLayers(); changed(); };
+$("bReplay").onclick = () => window.open("/replay", "swarmcore-replay");
+$("open3d").onclick = () => window.open("/view", "swarmcore-3d");
+$("agents").addEventListener("click", (e) => { const b = e.target.closest("button[data-cmd]"); if (b) cmd(b.dataset.cmd); });
+
+let prepMode = true;
+function showPrep(on) {
+  prepMode = on;
+  $("prep").hidden = !on;
+  $("flight").hidden = on;
+  for (const l of [area, ...nofly, ...homes]) if (l?.pm) on ? l.pm.enable?.() : l.pm.disable?.();
+  for (const m of homes) on ? m.dragging?.enable() : m.dragging?.disable();
+}
+
+function render(s) {
+  lastSnap = s;
+  const names = { idle: "Подготовка", running: "Миссия идёт", finished: "Миссия завершена", stopped: "Остановлена" };
+  $("state").textContent = names[s.state] || s.state;
+  $("state").className = `state st-${s.state}`;
+  $("clock").textContent = s.state === "idle" ? "" : `t = ${fmtT(s.t)} · ×${s.scale}`;
+  for (const e of s.feed) {
+    $("feed").insertAdjacentHTML("beforeend", `<li class="k-${e.kind}"><time>${fmtT(e.t)}</time><span>${esc(e.text)}</span></li>`);
+  }
+  if (s.feed.length) $("feed").scrollTop = $("feed").scrollHeight;
+  feedN = s.feed_n;
+  if (s.version !== geomVersion && s.version > 0) { loadGeometry(); }
+  if (s.state === "running" && prepMode) showPrep(false);
+  $("doneCard").hidden = prepMode || s.state === "running" || s.state === "idle";
+  if (!s.agents || prepMode) return;
+
+  const done = new Set(s.done), cancelled = new Set(s.cancelled || []);
+  for (const [id, layer] of Object.entries(cellLayers)) {
+    if (cancelled.has(id)) { layer.setStyle({ fillColor: "#555", fillOpacity: 0.35, color: "#999", dashArray: "3 3" }); continue; }
+    const o = s.owner[id];
+    const col = o == null ? "#888" : COLORS[o % 10];
+    layer.setStyle({ fillColor: col, fillOpacity: done.has(id) ? 0.6 : 0.2, color: done.has(id) ? "#fff" : col });
+  }
+  const n = s.n_tasks || Object.keys(cellLayers).length;
+  $("kDone").textContent = `${s.done.length}/${n}`;
+  $("progress").style.width = `${n ? (100 * s.done.length) / n : 0}%`;
+  $("kAir").textContent = String(s.agents.filter((a) => a.alt > 1 && !a.lost).length);
+  $("kLink").textContent = s.gcs_link ? "есть" : "отключена";
+  $("cLink").textContent = s.gcs_link ? "Отключить связь пульта" : "Вернуть связь пульта";
+  $("cPause").textContent = s.agents.some((a) => a.paused) ? "Продолжить" : "Пауза";
+  $("planv").textContent = s.plan_version ? `план v${s.plan_version}` : "";
+  const running = s.state === "running";
+  for (const id of ["cPause", "cRtl", "cLink", "cStop", "uNofly", "uArea"]) $(id).disabled = !running;
+
+  // строки бортов создаются один раз, дальше обновляются на месте — кнопки не пересоздаются под курсором
+  const tbody = $("agents");
+  if (tbody.children.length !== s.agents.length) {
+    tbody.innerHTML = s.agents.map((a) => `<tr data-id="${a.id}">
+      <td><span class="sw" style="background:${COLORS[a.id % 10]}"></span><span class="nm"></span></td>
+      <td><span class="pill"></span></td><td class="num alt"></td><td class="num batt"></td><td class="num task"></td>
+      <td><div class="agent-actions">
+        <button class="btn sm" data-cmd="rtl:${a.id}" title="Этот аппарат — домой">⌂</button>
+        <button class="btn sm danger" data-cmd="drain:${a.id}" title="Имитация разряда батареи">⚡</button>
+        <button class="btn sm danger" data-cmd="fail:${a.id}" title="Имитация отказа борта">✕</button>
+      </div></td></tr>`).join("");
+  }
+  s.agents.forEach((a, k) => {
+    const row = tbody.children[k];
+    const pct = a.battery_wh ? Math.max(0, 100 - (100 * a.energy_wh) / a.battery_wh) : null;
+    const batCol = pct == null ? "var(--muted)" : pct < 25 ? "var(--bad)" : pct < 45 ? "var(--warn)" : "var(--ok)";
+    row.title = a.issue || "";
+    row.querySelector(".nm").textContent = `${a.id}${a.leader === a.id ? " ★" : ""}`;
+    const pill = row.querySelector(".pill");
+    pill.className = `pill m-${a.mode}`;
+    pill.textContent = a.paused && !a.lost ? "ПАУЗА" : a.mode;
+    row.querySelector(".alt").textContent = a.alt != null ? `${Math.round(a.alt)} м` : "—";
+    row.querySelector(".batt").innerHTML = pct == null ? "—"
+      : `<span class="bat"><i style="width:${pct}%;background:${batCol}"></i></span>${Math.round(pct)}%`;
+    row.querySelector(".task").textContent = a.current ? a.current.replace("cell_", "") : (a.status || "—");
+    const dis = !running || a.lost || a.mode === "DONE";
+    for (const b of row.querySelectorAll("button")) b.disabled = dis;
+  });
+
+  for (const a of s.agents) {
+    if (a.lat == null) continue;
+    const pos = [a.lat, a.lon];
+    if (!droneMarkers[a.id]) {
+      trails[a.id] = L.polyline([], { color: COLORS[a.id % 10], weight: 2, opacity: 0.8 }).addTo(liveLayer);
+      droneMarkers[a.id] = L.marker(pos, { zIndexOffset: 1000, icon: L.divIcon({ className: "",
+        html: `<div class="droneicon" style="background:${COLORS[a.id % 10]}">${a.id}</div>`, iconSize: [22, 22], iconAnchor: [11, 11] }) }).addTo(liveLayer);
+    }
+    droneMarkers[a.id].setLatLng(pos);
+    droneMarkers[a.id].setOpacity(a.lost ? 0.45 : 1);
+    if (a.alt > 0.5 && !a.lost) trails[a.id].addLatLng(pos);
+  }
+}
+
+function connect() {
+  const es = new EventSource(`/api/stream?feed=${feedN}`);
+  es.onmessage = (ev) => render(JSON.parse(ev.data));
+  es.onerror = () => { es.close(); setTimeout(connect, 1500); };
+}
+
+(async function init() {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem("swarmcore-draft") || "null"); } catch (_) {}
+  const s = await (await fetch("/api/state")).json();
+  if (s.geometry) await loadGeometry();
+  else loadDraft(saved && saved.area?.length ? saved : sampleDraft());
+  if (s.state !== "idle" && s.geometry) showPrep(false);
+  connect();
+})();
+</script>
+</body>
+</html>

@@ -247,3 +247,96 @@ def test_thread_commands_report_in_order():
     assert [g[0] for g in got] == ["a", "b"]
     assert got[0][1] is None and isinstance(got[1][1], ValueError)
     cmds.close()
+
+
+# ------------------------------------------------------------------ команды пульта
+def test_pause_holds_everyone_and_resume_finishes():
+    sw = LocalSwarm(SMALL)
+    sw.at(30, lambda: sw.gcs.command("pause"))
+    sw.run(32)
+    pos = [n.motion.state().pos for n in sw.nodes]
+    sw.run(60)
+    assert all(n.paused for n in sw.nodes)
+    assert [n.motion.state().pos for n in sw.nodes] == pos, "на паузе аппараты висят на месте"
+    sw.gcs.command("resume")
+    s = sw.run(1200).summary()
+    _ok(s)
+    assert all(n.log.of_type("resumed") for n in sw.nodes)
+
+
+def test_rtl_one_agent_hands_tasks_over():
+    sw = LocalSwarm(SMALL)
+    sw.at(30, lambda: sw.gcs.command("rtl:2"))
+    s = sw.run(1200).summary()
+    _ok(s)
+    assert sw.nodes[2].rtl_reason == "команда оператора"
+    assert sw.nodes[0].rtl_reason is None and sw.nodes[1].rtl_reason is None
+
+
+def test_drain_command_triggers_low_battery_rtl_once():
+    sw = LocalSwarm(SMALL)
+    sw.at(30, lambda: sw.gcs.command("drain:1"))
+    s = sw.run(1200).summary()
+    _ok(s)
+    assert "низкий заряд" in sw.nodes[1].rtl_reason
+    assert len(sw.nodes[1].log.of_type("battery_drain")) == 1, "повтор команды не разряжает дважды"
+
+
+def test_several_commands_in_one_heartbeat_and_event_feed():
+    sw = LocalSwarm(SMALL)
+    sw.at(30, lambda: (sw.gcs.command("rtl:1"), sw.gcs.command("rtl:2")))
+    sw.run(1200)
+    assert sw.nodes[1].rtl_reason and sw.nodes[2].rtl_reason
+    types = {(e["src"], e["type"]) for e in sw.gcs.feed}
+    assert (1, "rtl") in types and (2, "rtl") in types and (0, "plan_published") in types
+    assert len({(e["src"], e["seq"]) for e in sw.gcs.feed}) == len(sw.gcs.feed), "лента без повторов"
+    assert sw.gcs.plan and sw.gcs.plan["version"] >= 2
+
+
+# ------------------------------------------------------------------ изменение миссии в полёте
+def _final(sw):
+    live = [n for n in sw.nodes if not n.crashed]
+    tasks = live[0].tasks
+    open_ids = [t.id for t in tasks if not t.is_finished]
+    cancelled = [t.id for t in tasks if t.status.value == "failed"]
+    return tasks, open_ids, cancelled
+
+
+def test_new_nofly_zone_in_flight_reroutes_and_cancels():
+    sw = LocalSwarm(SMALL)
+    zone = [[50, 40], [110, 40], [110, 80], [50, 80]]  # накрывает центральную ячейку целиком
+    sw.at(30, lambda: sw.gcs.add_update({"nofly": [zone]}))
+    s = sw.run(1500).summary()
+    tasks, open_ids, cancelled = _final(sw)
+    assert not open_ids and s["duplicates"] == 0
+    assert cancelled, "ячейка внутри новой зоны отменена"
+    assert all(n.mission_rev == 1 for n in sw.nodes)
+    causes = [e.data["cause"] for e in sw.nodes[0].log.of_type("plan_published")]
+    assert any("ревизия 1" in c for c in causes)
+    assert not any(n.log.of_type("plan_rejected") for n in sw.nodes), "план после изменения допустим"
+    # кто оказался внутри зоны в момент объявления, вылетел из неё и больше не заходил
+    from shapely.geometry import Point, Polygon
+    inside = Polygon(zone).buffer(-1.0)
+    for n in sw.nodes:
+        after = [r for r in n.trace if r["t"] > 30]
+        k = next((i for i, r in enumerate(after) if not inside.contains(Point(r["x"], r["y"]))), len(after))
+        assert after[k]["t"] < 45, "из зоны вылетел быстро"
+        assert not any(inside.contains(Point(r["x"], r["y"])) for r in after[k:])
+
+
+def test_extra_area_in_flight_is_flown():
+    sw = LocalSwarm(dict(SMALL, world={"size": [260, 120], "targets": {"count": 0}},
+                         mission={"n_cells": 9, "area": [[0, 0], [160, 0], [160, 120], [0, 120]]}))
+    sw.at(30, lambda: sw.gcs.add_update({"areas": [[[170, 10], [250, 10], [250, 110], [170, 110]]]}))
+    s = sw.run(2000).summary()
+    tasks, open_ids, _ = _final(sw)
+    added = [t for t in tasks if t.id.startswith("u1_")]
+    assert added and all(t.status.value == "done" for t in added)
+    assert not open_ids and s["duplicates"] == 0
+
+
+def test_station_counts_cancelled_tasks_as_closed():
+    sw = LocalSwarm(SMALL)
+    sw.at(30, lambda: sw.gcs.add_update({"nofly": [[[50, 40], [110, 40], [110, 80], [50, 80]]]}))
+    sw.run(1500)
+    assert sw.gcs.tasks_left() == 0
