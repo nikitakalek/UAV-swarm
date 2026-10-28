@@ -14,6 +14,10 @@ from typing import Any, Callable
 ALLOCATORS: dict[str, str] = {
     "stub_roundrobin": "swarmsim.stubs:RoundRobinStubAllocator",
     "manual_sectors": "swarmsim.missions.sectors:ManualSectorAllocator",
+    # М1 через адаптер к симулятору (swarmsim/m1_bridge.py)
+    "static_naive": "swarmsim.m1_bridge:StaticNaiveSim",
+    "static_voronoi": "swarmsim.m1_bridge:StaticVoronoiSim",
+    "central_greedy": "swarmsim.m1_bridge:CentralGreedySim",
 }
 SENSORS: dict[str, str] = {"stub_swath": "swarmsim.stubs:SwathSensorStub"}
 ENERGY: dict[str, str] = {"stub_constant": "swarmsim.stubs:ConstantPowerStub"}

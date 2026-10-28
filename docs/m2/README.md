@@ -30,7 +30,7 @@ swarmcore viz runs/failures__stub_roundrobin/seed_001 --out failures.gif --png f
 | `apps/cli.py`, `apps/viz.py`, `swarmcore_px4/`, `scenarios/`, CI | М2 |
 | `swarmsim/interfaces.py` | вся команда (стыки GEN-2) |
 | `swarmsim/stubs.py`, `swarmsim/basic_metrics.py` | **временные заглушки**, заменяются М1/М3/INT |
-| `swarmsim/alloc/*`, `planning/routing.py`, `planning/validator.py` | М1 (не создавались) |
+| `swarmsim/sectors.py`, `alloc.py`, `plan.py`, `m1_bridge.py` | М1 |
 | `sensing.py`, `comms.py`, `faults.py`, энергия | М3 (не создавались) |
 | `metrics.py`, `experiments/` | интеграция (не создавались) |
 
