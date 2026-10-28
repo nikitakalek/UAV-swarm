@@ -22,12 +22,14 @@ dev = ["pytest>=7"]
 
 [project.scripts]
 swarmcore = "apps.cli:main"
+swarmnode = "swarmcore_node.__main__:main"
 
 [tool.setuptools.packages.find]
-include = ["swarmsim*", "apps*", "swarmcore_px4*"]
+include = ["swarmsim*", "apps*", "swarmcore_px4*", "swarmcore_node*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 markers = [
     "sitl: требует запущенного PX4 SITL (по умолчанию пропускается)",
+    "slow: сквозной прогон процессов по UDP (~15 с)",
 ]

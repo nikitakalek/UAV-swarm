@@ -27,19 +27,19 @@
 
 ## Код
 
-* `swarmsim/` — алгоритмы (деление участка `sectors.py`, распределение и перераспределение
-  `alloc.py`, маршрут и валидатор `plan.py`) и симулятор со стендом прогонов. Описание —
-  [swarmsim/README.md](swarmsim/README.md) и [docs/m2/README.md](docs/m2/README.md).
+* `swarmcore_node/` — **бортовой узел** (один процесс на аппарат): распределение, отказы,
+  смена лидера, режимы, журнал; наземная станция и демо. Описание —
+  [docs/swarm_node.md](docs/swarm_node.md).
+* `swarmsim/` — алгоритмы группы (секторы, распределение и ремонт, маршрут, валидатор
+  плана) и симулятор со стендом прогонов. Описание — [swarmsim/README.md](swarmsim/README.md)
+  и [docs/m2/README.md](docs/m2/README.md).
 * `swarmcore_px4/` — адаптер к PX4 через MAVSDK и запуск нескольких PX4 SITL.
-* `apps/` — командный интерфейс `swarmcore` и визуализация.
+* `apps/` — командный интерфейс симулятора `swarmcore` и визуализация.
 
 ```bash
 python3 -m venv .venv && ./.venv/bin/pip install -e ".[dev,viz]"
 ./.venv/bin/python -m pytest -q                       # все тесты (SITL-тест пропускается)
-./.venv/bin/swarmcore run --scenario scenarios/failures.yaml --seed 1 --set allocator.name=central_greedy
-./.venv/bin/python scripts/report.py --alloc          # время расчёта и баланс загрузки
-./.venv/bin/python scripts/visualize.py --plan        # картинка плана
+./.venv/bin/python -m swarmcore_node demo --fail 1@40 --time-scale 10 --out runs/demo   # демо MVP
+./.venv/bin/swarmcore run --scenario scenarios/failures.yaml --seed 1 --set allocator.name=sector
+./.venv/bin/python scripts/m1_pictures.py             # картинки модуля 1 в docs/img/
 ```
-
-`scripts/create_issues.sh` создаёт задачи по **старому** плану (P0–P6) — не запускать;
-новая доска описана в [docs/05_mvp_and_plan.md](docs/05_mvp_and_plan.md).

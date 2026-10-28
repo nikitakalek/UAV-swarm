@@ -1,18 +1,17 @@
-"""Тесты геометрии секторов (M1-1)."""
+"""Деление участка на компактные секторы равной площади (planning.partition)."""
 
 from __future__ import annotations
 
 import pytest
 from shapely.geometry import Point, Polygon, box
 
-from swarmsim.sectors import (
+from swarmsim.planning.partition import (
     area_stats,
     build_partition,
     grid_seeds,
     lloyd_equalize,
     power_equalize,
     power_partition,
-    strip_partition,
     voronoi_partition,
 )
 
@@ -23,38 +22,6 @@ N_VALUES = [5, 10, 20]
 def domain():
     """Область 1000 x 1000 м."""
     return box(0.0, 0.0, 1000.0, 1000.0)
-
-
-# --- наивные полосы (B1) ---------------------------------------------------
-
-
-@pytest.mark.parametrize("n", N_VALUES)
-def test_strip_partition_equal_area(domain, n):
-    part = strip_partition(domain, n)
-    assert len(part) == n
-    a = part.areas
-    assert a.min() > 0
-    assert a.max() / a.min() < 1.01, "полосы должны быть равны по площади"
-    assert a.sum() == pytest.approx(domain.area, rel=1e-6)
-
-
-@pytest.mark.parametrize("n", N_VALUES)
-def test_strip_partition_axis_y(domain, n):
-    part = strip_partition(domain, n, axis="y")
-    assert len(part) == n
-    a = part.areas
-    assert a.max() / a.min() < 1.01
-
-
-def test_strip_partition_rejects_bad_axis(domain):
-    with pytest.raises(ValueError):
-        strip_partition(domain, 3, axis="z")
-
-
-def test_strip_partition_single(domain):
-    part = strip_partition(domain, 1)
-    assert len(part) == 1
-    assert part.total_area() == pytest.approx(domain.area, rel=1e-6)
 
 
 # --- семена ----------------------------------------------------------------

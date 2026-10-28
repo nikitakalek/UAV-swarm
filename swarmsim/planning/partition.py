@@ -1,20 +1,17 @@
-"""Разбиение области на секторы (задача M1-1).
+"""Деление участка на компактные секторы равной площади (М1).
 
-Три способа разбиения:
+Конвейер :func:`build_partition`: решётка семян → Ллойд (компактность) → power diagram
+(взвешенный Вороной, точное равенство площадей). Разброс площадей 1–2 %, вытянутость
+секторов ≈ 1 — в отличие от полос, меньше холостых перелётов и суммарная длина границ.
 
-* :func:`strip_partition` — наивные полосы равной площади (baseline B1, задача M1-1a);
-* :func:`voronoi_partition` — диаграмма Вороного, обрезанная по домену;
-* :func:`lloyd_equalize` — выравнивание площадей секторов алгоритмом Ллойда (CVT).
-
-Все функции детерминированы: при одном и том же входе дают один и тот же результат.
-Ни одна из них не зависит от глобального состояния — только от геометрии.
+Все функции детерминированы и зависят только от геометрии.
 """
 
 from __future__ import annotations
 
 import math
 from dataclasses import dataclass
-from typing import Iterable, Sequence
+from typing import Sequence
 
 import numpy as np
 from shapely.geometry import MultiPoint, Point, Polygon, box
@@ -81,7 +78,7 @@ class SectorPartition:
 
 
 def area_stats(partition: SectorPartition) -> dict[str, float]:
-    """Статистика площадей секторов — нужна для отчёта (критерий готовности M1-1)."""
+    """Статистика площадей секторов — нужна для отчёта ."""
     a = np.array([s.area for s in partition.sectors if not s.is_empty], dtype=float)
     if a.size == 0:
         return {"n": 0.0, "min": 0.0, "max": 0.0, "mean": 0.0, "ratio": float("inf"), "cv": float("nan")}
@@ -93,76 +90,6 @@ def area_stats(partition: SectorPartition) -> dict[str, float]:
         "ratio": float(a.max() / a.min()) if a.min() > 0 else float("inf"),
         "cv": float(a.std() / a.mean()) if a.mean() > 0 else float("nan"),
     }
-
-
-# ---------------------------------------------------------------------------
-# Наивные полосы (baseline B1)
-# ---------------------------------------------------------------------------
-
-
-def _slab_full(domain: BaseGeometry, a: float, b: float, axis: str) -> BaseGeometry:
-    """Полоса между координатами ``a`` и ``b`` во всю ширину/высоту домена."""
-    minx, miny, maxx, maxy = domain.bounds
-    if axis == "x":
-        return box(a, miny, b, maxy)
-    return box(minx, a, maxx, b)
-
-
-def _cut_by_area(
-    domain: BaseGeometry,
-    lo: float,
-    start: float,
-    target_area: float,
-    axis: str,
-    iters: int = 40,
-) -> float:
-    """Координата разреза, при которой площадь от ``lo`` до разреза равна ``target_area``."""
-    minx, miny, maxx, maxy = domain.bounds
-    hi = maxx if axis == "x" else maxy
-    a, b = start, hi
-    for _ in range(iters):
-        mid = 0.5 * (a + b)
-        if _safe_intersection(_slab_full(domain, lo, mid, axis), domain).area < target_area:
-            a = mid
-        else:
-            b = mid
-    return 0.5 * (a + b)
-
-
-def strip_partition(domain: BaseGeometry, n: int, axis: str = "long") -> SectorPartition:
-    """Делит область на ``n`` полос равной площади.
-
-    ``axis="long"`` — полосы поперёк длинной стороны (по умолчанию).
-    Границы полос ищутся бисекцией по площади, поэтому метод работает и для
-    непрямоугольных доменов, а не только для прямоугольников.
-    """
-    if n < 1:
-        raise ValueError("n должно быть >= 1")
-
-    minx, miny, maxx, maxy = domain.bounds
-    width, height = maxx - minx, maxy - miny
-    if axis == "long":
-        axis = "x" if width >= height else "y"
-    if axis not in ("x", "y"):
-        raise ValueError("axis должен быть 'x', 'y' или 'long'")
-
-    lo, hi = (minx, maxx) if axis == "x" else (miny, maxy)
-    total = domain.area
-
-    cuts = [lo]
-    for i in range(1, n):
-        cuts.append(_cut_by_area(domain, lo, cuts[-1], total * i / n, axis))
-    cuts.append(hi)
-
-    sectors: list[BaseGeometry] = []
-    seeds: list[tuple[float, float]] = []
-    for a, b in zip(cuts[:-1], cuts[1:]):
-        cell = _clean(_safe_intersection(_slab_full(domain, a, b, axis), domain))
-        sectors.append(cell)
-        c = cell.centroid if not cell.is_empty else Point(0.5 * (a + b), 0.5 * (miny + maxy))
-        seeds.append((float(c.x), float(c.y)))
-
-    return SectorPartition(tuple(sectors), tuple(seeds))
 
 
 # ---------------------------------------------------------------------------
@@ -303,7 +230,7 @@ def lloyd_equalize(
 
     На каждой итерации семя сдвигается в центроид своей ячейки. Это делает
     ячейки компактнее и выравнивает их площади *приблизительно* (точное
-    равенство гарантирует только power diagram — см. issue M1-1).
+    равенство даёт только power diagram).
     """
     seeds = [(float(x), float(y)) for x, y in seeds]
     for _ in range(max(0, iters)):
@@ -466,54 +393,3 @@ def build_partition(
     if power_iters <= 0:
         return voronoi_partition(domain, seeds)
     return power_equalize(domain, seeds, iters=power_iters)
-
-
-# ---------------------------------------------------------------------------
-# Назначение задач секторам
-# ---------------------------------------------------------------------------
-
-
-def assign_tasks(
-    tasks: Iterable[object],
-    sectors: Sequence[BaseGeometry],
-    mode: str = "centroid",
-) -> list[list[int]]:
-    """Раскидывает задачи по секторам. Возвращает список списков ``task.id``.
-
-    ``mode="centroid"`` — по центроиду задачи (по умолчанию).
-    ``mode="overlap"``  — по максимальной площади пересечения (нужен ``task.polygon``).
-    """
-    groups: list[list[int]] = [[] for _ in sectors]
-
-    for task in tasks:
-        idx = _sector_index(task, sectors, mode)
-        groups[idx].append(int(task.id))
-
-    for g in groups:
-        g.sort()
-    return groups
-
-
-def _sector_index(task: object, sectors: Sequence[BaseGeometry], mode: str) -> int:
-    if mode == "overlap":
-        polygon = getattr(task, "polygon", None)
-        if polygon is not None:
-            best_i, best_area = 0, -1.0
-            for i, s in enumerate(sectors):
-                if s.is_empty:
-                    continue
-                a = s.intersection(polygon).area
-                if a > best_area:
-                    best_i, best_area = i, a
-            if best_area > 0:
-                return best_i
-    elif mode != "centroid":
-        raise ValueError("mode должен быть 'centroid' или 'overlap'")
-
-    # расстояние от центроида задачи до сектора: внутри сектора оно равно 0,
-    # на границе — выбирается первый (детерминированно)
-    p = Point(*task.centroid)
-    distances = [s.distance(p) if not s.is_empty else float("inf") for s in sectors]
-    if not distances:
-        raise ValueError("нет секторов для назначения")
-    return int(np.argmin(distances))
