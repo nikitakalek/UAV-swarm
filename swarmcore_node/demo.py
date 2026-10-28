@@ -42,6 +42,8 @@ def run_demo(args) -> int:
         cmd = [sys.executable, "-m", "swarmcore_node", "node", "--id", str(i), "--home", f"{hx},{hy}",
                "--speed", str(sc.agents.speed), "--vehicle", args.vehicle,
                "--altitude", str(sc.agents.altitude + i * sc.agents.altitude_step), *common]
+        if getattr(args, "vehicle_commands", None):
+            cmd += ["--vehicle-commands", args.vehicle_commands]
         procs[i] = subprocess.Popen(cmd, stdout=open(out / f"node_{i}.stdout", "w"), stderr=subprocess.STDOUT)
 
     def on_fail(i: int) -> None:

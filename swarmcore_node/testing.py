@@ -20,16 +20,16 @@ from swarmsim.scenario import Scenario
 
 class LocalSwarm:
     def __init__(self, scenario: Scenario | dict, config: Optional[NodeConfig] = None, *,
-                 loss: float = 0.0, seed: int = 0, dt: float = 0.1) -> None:
+                 loss: float = 0.0, seed: int = 0, dt: float = 0.1,
+                 motion_factory: Optional[Callable[[int, tuple, float], Any]] = None) -> None:
         self.sc = scenario if isinstance(scenario, Scenario) else Scenario.model_validate(scenario)
         self.hub = MemoryHub(loss=loss, seed=seed)
         self.dt = dt
         self.t = 0.0
         ag = self.sc.agents
-        self.nodes = [
-            SwarmNode(i, KinematicMotion(i, ag.home_of(i), v_cruise=ag.speed), self.hub.link(i), config)
-            for i in range(ag.count)
-        ]
+        make = motion_factory or (lambda i, home, speed: KinematicMotion(i, home, v_cruise=speed))
+        self.nodes = [SwarmNode(i, make(i, ag.home_of(i), ag.speed), self.hub.link(i), config)
+                      for i in range(ag.count)]
         self.gcs = GroundStation(self.hub.link(GCS_ID), self.sc, mission_id="test")
         self._schedule: list[tuple[float, Callable[[], None]]] = []
         self.fail_times: dict[int, float] = {}
